@@ -1,2 +1,3 @@
 # CPP-Learning
- Summary of CPP learning path
+
+- [Effective C++](./EffectiveC++/EffectiveC++.md)
