@@ -255,4 +255,78 @@
 
 ### 30. Understand the ins and outs of inlining
 
+- 不要过度热衷inline函数，因为其会造成代码膨胀，从而可能导致额外的换页行为，降低指令高速缓存的击中率
+- inline函数只是对编译器的建议，并非强制命令，大部分编译器拒绝将太过复杂的函数inlining，而所有对virtual函数的调用（除非是最平淡无奇的）也都会使inlining落空，因为virtual意味着直到运行期才能确定调用哪个函数，而inline意味着执行前先将调用动作替换为被调用函数的本体
+  - 隐喻声明inline函数的方式是将其定于于class的定义式内，明确的inline函数的方式是在函数定义式前加上inline关键字
+  - 有时候编译器虽有意愿inlining某个函数，还是可能为函数生成一个本体，例如程序要获得某个inline函数的地址，编译器通常必须为此函数生成一个函数本体
+- 值得注意的是，inline函数和template函数通常都被定义于头文件中，但是template函数并非一定是inline的
+  - inline函数通常一定被置于头文件内，因为大多数编译器为了将“函数调用”替换为“被调用函数本体”，必须知道函数定义式，因此inlining大多是编译期行为
+  - template通常也被置于头文件内，因为它一旦被使用，编译器为了将其具现化，同样必须知道函数定义式
+  - 但是template的具现化与inlining无关，如果你认为某个template函数应该被inlining，请明确的将其声明为inline
+- 构造函数和析构函数通常是inline的糟糕候选人，因为编译器可能以精致复杂的代码来实现对象创造和销毁时的各种保证，而这些代码可能就放在你的构造函数和析构函数中
 
+### 31. Minimize compilation dependencies between files
+
+- 编译器依存性最小化的本质正是在于“声明的依存性”替换“定义的依存性”，尽量让头文件自我满足，如果做不到则让它与其他文件内的声明式（而非定义式）相依赖
+- 如果使用object references或object pointers可以完成任务，就不要使用objects
+  - 你可以只靠一个类型声明式就定义出指向该类型的references和pointers，但如果定义了某类型的objects，就必须用到该类型的定义式
+- 如果能够，尽量以class声明式替换class定义式
+  - 注意，当声明一个函数而它用到某个class时，并不需要该class的定义，纵使函数以by value方式传递类型的参数（或返回值）
+  - 或许你会惊讶为何不需要知道定义细节，但事实是，一旦任何人调用这些函数，调用之前class的定义式就必须先曝光才行
+- 为声明式和定义式提供不同的头文件
+  - 这两个文件必须总是保持一致性，而程序库的用户总是应该include那个声明式的头文件而非前置声明若干函数
+  - 只含声明式的头文件命名方式参考C++标准程序库头文件`<iosfwd>`，其包含iostream各组件的声明式
+- 通常利用Handle classes和Interface classes解除接口和实现之间的耦合关系，从而降低文件间的编译依存性
+  - 代价是运行期丧失若干速度，又为每个对象超额付出若干内存
+  - 对于Handle classes，成员函数必须通过implementation pointer取得对象数据，且必须初始化并指向动态分配而来的object
+  - 对于Interface classes，由于每个函数都是virtual，所以每次函数调用必须付出间接跳跃的开销，且派生对象必须包含一个vptr（virtual pointer table）
+
+## Inheritance and Object-Oriented Design
+
+### 32. Make sure public inheritance models "is-a"
+
+- public继承意味is-a关系，适用于base class身上的每一件事情一定也适用于derived class，因为每一个derived class对象也都是一个base class对象
+
+### 33. Avoid hiding inherited names
+
+- derived class内的名称会遮掩base class内的名称，在public继承下从来没有人希望如此
+- 为了让被遮掩的名称再见天日，可使用using声明式或forwarding function
+  - using声明式的语法是`using base::func;`，其作用是让base class内所有名为的func的函数在derived class作用域内可见并且public
+  - forwarding function的语法是`type func(parameter list) { return base::func(parameter list); }`，现在只有某个对应参数版本的func函数在derived class中才可见
+
+### 34. Differentiate between inheritance of interface and inheritance of implementation
+
+- 接口继承和实现继承不同，在public继承下，derived class总是继承base class的接口
+- pure virtual函数只具体指定接口继承，impure virtual函数具体指定接口继承及其缺省实现继承
+- non-virtual函数具体指定接口继承及其强制性实现继承
+
+### 35. Consider alternatives to virtual functions
+
+- 不妨考虑virtual函数的替代方案
+  - 使用non-virtual interface（NVI）手法，这是Template Method设计模式的一种特殊形式，它以public non-virtual成员函数包裹较低访问性（private或protected）的virtual函数
+  - 将virtual函数替换为函数指针成员变量，这是Strategy设计模式的一种分解表现形式
+  - 将继承体系内的virtual函数替换为另一个继承体系内的virtual函数，这是Strategy设计模式的传统实现手法
+- 将机能从成员函数移到class外部函数，带来的缺点是，非成员函数将无法访问class的non-public成员
+
+### 36. Never redefine an inherited non-virtual function
+
+- non-virtual函数是静态绑定（statically bound），而virtual函数是动态绑定（dynamically bound）
+
+### 37. Never redefine a function's inherited default parameter value
+
+- virtual函数是动态绑定（dynamically bound），而缺省参数值却是静态绑定（statically bound）
+  - 静态绑定又名前期绑定，动态绑定又名后期绑定
+  - 对象的静态类型（static type）是其在程序中被声明时所采用的类型
+    - 如`Shape* ps = new Circle;`，`ps`的静态类型是`Shape*`
+  - 而对象的动态类型（dynamic type）则是指目前所指向对象的实际类型，也就是说动态类型可以表现出一个对象实际将会有什么行为，动态类型可在程序执行过程中改变（通常是经由赋值操作）
+    - 如`Shape* ps = new Circle;`，`ps`的动态类型是`Circle*`
+- 至于C++为何会以这种方式运作，答案在于运行期效率，如果缺省参数值是动态绑定的，编译器就必须有某种方法在运行期为virtual函数决定适当的参数缺省值
+- 合适的做法是考虑virtual函数的替代设计，其中之一便是NVI手法，令base class内的一个public non-virtual函数调用private virtual函数，后者可被derived class重新定义
+
+### 38. Model "has-a" or "is-implemented-in-terms-of" through composition
+
+- 复合（composition）是类型之间的一种关系，当某种类型的对象内含它种类型的对象，便是这种关系
+- 在应用域（application domain），即程序中的对象相当于你所塑造的世界中的某些事物中，复合意味着has-a
+- 在实现域（implementation domain），即对象纯粹是实现细节上的人工制品，例如缓冲区、互斥器等，复合意味着is-implemented-in-terms-of
+
+### 39. Use private inheritance judiciously
