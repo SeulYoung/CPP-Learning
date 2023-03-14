@@ -57,7 +57,8 @@
 
 - derived class对象内的base class成分会在derived class自身的成分被构造之前先行构造妥当
   - 换句通俗的话说，在base class构造期间，virtual函数不是virtual的
-  - 更根本的原因是，在derived class对象的base class构造期间，对象的类型是base class，而不是derived class，不止virtual函数会被编译器解析至base class，其运行期类型信息也会把对象视为base class类型
+  - 更根本的原因是，在derived class对象的base class构造期间，对象的类型是base class，而不是derived class
+  - 不止virtual函数会被编译器解析至base class，其运行期类型信息也会把对象视为base class类型
 - 解决办法之一是，既然你无法使用virtual函数从base class向下调用，那就在构造期间令derived class将必要的构造信息向上传递至base class构造函数
 
 ### 10. Have assignment operators return a reference to *this
@@ -330,3 +331,61 @@
 - 在实现域（implementation domain），即对象纯粹是实现细节上的人工制品，例如缓冲区、互斥器等，复合意味着is-implemented-in-terms-of
 
 ### 39. Use private inheritance judiciously
+
+- private继承规则
+  - private继承时，编译器不会自动将一个derived class对象转换为base class对象
+  - private继承时，base class中的所有成员，在derived class中都会变成private属性
+- private继承意味着is-implemented-in-terms-of（根据某物实现出），其用意是为了采用base class内已经备妥的某些特性，而不是对象之间存在任何观念上的关系，private继承纯粹只是一种实现技术
+- private继承虽然意味着is-implemented-in-terms-of，但它的优先级要低于复合（composition），你需要明智而审慎的使用private继承，但是当derived class需要访问protected base class的成员，或需要重新定义继承而来的virtual函数时，这么设计是合理的
+- 和复合不同的是，private继承可以实现empty base最优化，这对致力于对象尺寸最小化的程序库开发者而言，可能很重要
+
+### 40. Use multiple inheritance judiciously
+
+- 多重继承（multiple inheritance）是指一个derived class可以继承自多个base class，但是相应的，base class中相同的名称可能会产生歧义性，要解决这个问题你必须明白的指出要调用哪一个base class内的函数
+- 多重继承的base classes如果在继承体系中又有着共同且更高级的base class，则会产生更致命的菱形继承问题
+  - 此时你需要面对这样一个问题，如果顶层base class中存在一个成员变量A，那么你是否打算让base class内的成员变量经由每一条路径被复制？如果是，那么最底层的derived class内将会有两份A成员变量，但简单的逻辑告诉我们，derived class中不应该有两份A成员变量
+- C++在这场多重继承的辩论中并没有倾斜立场，两个方案其都支持
+  - 缺省情况下的做法是执行复制，也就是会产生两份成员变量
+  - 如果那不是你想要的，则必须令那个带有此数据的base class成为virtual base class，你必须令所有直接继承自它的classes采用virtual继承
+- 从正确行为的观点看，public继承应该总是virtual继承的，但是不要盲目使用virtual继承，因为你需要为virtual继承付出代价
+  - 使用virtual继承的class所产生的对象往往比使用non-virtual继承的体积大
+  - 访问virtual base class的成员变量时，也比访问non-virtual成员时速度慢
+  - 支配virtual base class初始化的规则远为复杂且不直观，virtual base的初始化责任是由继承体系中最底层的class负责
+    - 因此class若派生自virtual bases而需要初始化，必须认知其virtual bases，不论那些bases距离多远
+    - 当一个新的derived class加入继承体系时，它必须承担其virtual bases（不论直接或间接）的初始化责任
+- 因此对virtual base class的使用忠告很简单
+  - 第一，非必要不使用virtual base class，必须确定，你的确是在明智而审慎的情况下使用它
+  - 第二，如果必须使用，尽可能避免在其中放置数据，如果virtual base class不带任何数据，将是最具实用价值的情况
+
+## Templates and Generic Programming
+
+### 41. Understand implicit interfaces and compile-time polymorphism
+
+- C++中面向对象编程的世界总是以显式接口（explicit interface）和运行期多态（runtime polymorphism）解决问题
+  - 对class而言接口是显式且以函数签名为中心的，多态则通过virtual函数发生于运行期
+- 但Template和泛型编程的世界，与面向对象有根本上的不同，此世界中则是以隐式接口（implicit interface）和编译期多态（compile-time polymorphism）解决问题
+  - 对template参数而言，接口是隐式的，奠基于有效表达式，多态则是通过template具现化和函数重载解析（function overloading resolution）发生于编译器
+- “运行期多态”和“编译期多态”类似于“哪一个重载函数该被调用（发生在编译期）”和“哪一个virtual函数该被绑定（发生在运行期）”之间的差异
+
+### 42. Understand the two meanings of typename
+
+- 从C++的角度看，声明template参数时，不论使用关键字`class`还是`typename`，意义完全相同
+- template内出现的名称如果相依于某个template参数，称之为从属名称（dependent names），如果从属名称在class内呈嵌套状，则称之为嵌套从属名称（nested dependent name），如果某个名称不依赖于任何template参数，则称之为非从属名称（non-dependent names）
+  - 嵌套从属名称有可能导致解析困难，假设现在有`template<typename C> ...`，同时有`C::const_itrator* x;`（注意这并非有效代码），看起来似乎是声明`x`为一个local指针变量
+  - 但是，如果`C`有个static成员变量而碰巧被命名为`const_iterator`，或如果`x`碰巧是个global变量名称呢？那样的话上述语句就变成了一个相乘动作（这听起来确实有点疯狂，但C++解析器必须操心所有可能的输入）
+  - 而C++有个规则可以解析此起义状态：如果解析器在template中遭遇一个嵌套从属名称，便假设这名称不是个类型，除非你告诉它，因此缺省情况下嵌套从属名称并非类型
+- 请使用关键字`typename`标识嵌套从属类型名称，但不得在base class lists（基类列）或member initialization list（成员初值列）内以它作为base class修饰符
+
+### 43. Know how to access names in templatized base classes
+
+- C++往往拒绝在templatized base classes（模板化基类）内寻找继承而来的名称，那是因为base class templates有可能被特化，而特化版本可能不提供和一般性template相同的接口
+  - 就某种意义而言，当我们从Object Oriented C++跨进Template C++时，继承就不像以前那般畅行无阻了
+- 为了使C++不进入templatized base classes观察的行为失效，有三种办法
+  - 第一，在base class函数调用动作之前加上`this->`
+  - 第二，使用using声明式，告诉编译器进入base class作用域内查找
+  - 第三，使用`Base<type>::func()`明确指出被调用的函数位于base class内，但这往往是最不让人满意的一个解法，因为如果被调用的是virtual函数，这种明确资格修饰（explicit qualification）会关闭virtual绑定行为
+- 从名称可视点（visibility point）的角度出发，上述每一个解法做的事情都相同，对编译器承诺“base class template的任何特化版本都将支持其一般泛化版本所提供的接口”，但如果这个承诺最终未被实践，往后的编译最终还是会面临失败
+
+### 44. Factor parameter-independent code out of templates
+
+
