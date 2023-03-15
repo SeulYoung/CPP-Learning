@@ -78,7 +78,7 @@
 - 任何时候为derived class对象撰写copying函数，都必须谨慎的将base class部分一并复制，你应该让derived class的copying函数调用相应的base class函数
   - 保证复制所有的local成员变量
   - 保证调用所有base class内适当的copying函数
-- 尽管copy构造函数和copy assignment操作符往往有着近似的实现本地，但你绝不应该令两者互相调用
+- 尽管copy构造函数和copy assignment操作符往往有着近似的实现本体，但你绝不应该令两者互相调用
   - 如果你想要消除两者之间重复的代码，建立一个新的成员函数给两者调用，通常是private函数且被命名为init
 
 ## Resource Management
@@ -180,13 +180,21 @@
 
 ### 23. Prefer non-member non-friend functions to member functions
 
-- 越多的东西被封装，我们改变这些东西的能力就越大，改变时就能影响越少的用户
-- 将不同分类的便利函数放在多个头文件内但隶属于同一个命名空间，可以降低编译依赖型，并且可以让用户自由选择需要的函数
-- 宁可用non-member non-friend函数替换member函数，这样可以增加封装性、包裹弹性和机能扩充性
+- 让我们从封装开始讨论，首先，越多的东西被封装，越少人可以看到它，我们改变这些东西的能力就越大，改变时就能影响越少的用户
+  - 现在考虑对象内的数据，越少代码可以看到数据，越多的数据被封装，我们就能越自由的改变对象数据，通过计算能够访问该数据的函数数量就能作为一种粗糙的量测，因此成员变量应该是private的，否则就有无限量的函数可以访问它们
+  - 因此，现在让你在member函数和non-member函数之间做选择，两者提供完全相同的机能，那么导致较大封装性的毫无疑问是non-member non-friend函数，因为其并不增加“能够访问class内private成分”的函数数量
+- 在C++中，比较自然的做法是让该类函数成为non-member函数并位于相关联class所在的同一个namespace
+  - 另一个优势是，将不同分类的便利函数放在多个头文件内但隶属于同一个命名空间，可以降低编译依存性，并且可以让用户自由选择需要的函数
+- 现在，你应该能够理解这种反直觉的行为，即宁可用non-member non-friend函数替换member函数，这样可以增加封装性、包裹弹性和机能扩充性
 
 ### 24. Declare non-member functions when type conversions should apply to all parameters
 
-- 如果你需要为某个函数的所有参数进行类型转换，那么这个函数必须是个non-member函数
+- 假设现有一个class Number，该class允许“int-to-Number”隐式转换，你需要为其实现一个`operator*`操作
+  - 此时你的直觉告诉你应该保持面向对象精神，将其实现为成员函数，写法为`const Number operator* (const Number& rhs) const`
+    - 很快你就会发现，当你尝试混合式算术时只有一半行得通，即`Number * 2`行得通，但`2 * Number`却会出错，如果你以函数形式重写两式为`Number.operator*(2)`和`2.operator*(Number)`，问题一目了然
+    - 结论是，只有当参数被列于参数列表内，这个参数才是隐式类型转换的合格参与者，而“被调用之成员函数所隶属的那个对象”，即`this`对象这个隐喻参数，绝不是隐式转换的合格参与者，这也解释了为什么`2 * Number`为什么会出错，此时你并能指望编译器自动将数字隐式转换为Number，然后调用`operator*`成员函数
+  - 最终，可行之道拨云见日，让`operator*`成为一个non-member函数，这允许编译器在每一个实参身上执行隐式转换，写法为`const Number operator* (const Number& lhs, const Number& rhs)`
+- 最后，请记住，如果你需要为某个函数的所有参数（包括被this指针所指的那个隐喻参数）进行类型转换，那么这个函数必须是个non-member函数
 
 ### 25. Consider support for a non-throwing swap
 
@@ -388,4 +396,25 @@
 
 ### 44. Factor parameter-independent code out of templates
 
+- Templates生成多个classes和多个函数，所以任何template代码都不该与某个造成膨胀的template参数产生相依关系
+- 因非类型模板参数（non-type template parameters）而造成的代码膨胀，往往可消除，做法是以函数参数或class成员变量替换template参数
+- 因类型参数（type parameters）而造成的代码碰撞，往往可降低，做法是让带有完全相同二进制表述（binary representations）的具现类型共享实现码
+  - 例如大多数平台上，所有指针类型都有相同的二进制表述，因此templates持有指针者（如`list<int*>`和`list<SquareMatrix<long, 3>*`等等）往往应该对每一个成员函数使用唯一一份底层实现
+  - 如果你实现某些成员函数而它们操作强类型指针（strongly typed pointers，即T*），你应该令它们调用另一个操作无类型指针（untyped pointers，即void*）的函数，由后者完成实际工作
 
+### 45. Use member function templates to accept "all compatible types"
+
+- C++中，derived class指针可以隐式转换为base class指针，指向non-const对象的指针可以转换为指向const对象的指针等等，但是对于模板代码`SmartPtr<Base> p1 = SmartPtr<Derived>(new Derived)`呢？
+  - 显然，如果以带有继承关系的两个class为模板参数分别具现化某个template，产生出来的两个具现体并不带有base-derived关系，所以编译器视两者为完全不同的classes
+- 面对这个问题，显然一个template可以被无限量的具现化，如果我们寄希望于编写构造函数来实现转型的需要，那我们需要的构造函数数量就无止尽了，因此我们需要一个构造模板，这样的模板是所谓的member function templates，作用是为class生成函数
+  - 假设现有模板类`template<typename T> class SmartPtr { ... }`，则其构造模板的一般形式为`template<typename U> SmartPtr(const SmartPtr<U>& other);`
+  - 此代码的意思是，对任何类型T和任何类型U，可以根据`SmartPtr<U>`生成一个`SmartPtr<T>`对象
+  - 上述泛化copy构造函数并未声明为explicit，因为原始指针类型之间的转换是隐式转换，所以仿效这种行为也属合理
+- 但是还有另一个问题需要解决，那就是我们希望根据`SmartPtr<Derived>`创建`SmartPtr<Base>`，但是却不希望根据`SmartPtr<Base>`创建`SmartPtr<Derived>`，或根据`SmartPtr<double>`创建`SmartPtr<int>`，因此我们必须从某方面对这一member template所创建的成员函数群进行拣选或筛除
+  - 假设SmartPtr内有原始指针成员变量`T* heldPtr;`，则可以用`template<typename U> SmartPtr(const SmartPtr<U>& other) : heldPtr(other.getPtr()) { ... }`来实现代码中约束转换行为
+  - 使用成员初始列表来初始化`SmartPtr<T>`之内类型为`T*`的成员变量，并以类型为`U*`的指针作为初值，这个行为只有当“存在某个隐式转换可将`U*`指针转换为`T*`指针”时才能通过编译
+- member function template（成员函数模板）的效用不限于构造函数，常用的另一方面是支持赋值操作的兼容行为
+- member function template是个奇妙的东西，但它们并不改变语言的基本规则，例如在class内声明泛化copy构造函数（一个member template）并不会阻止编译器生成它们自己的copy构造函数（一个non-template）
+  - 因此如果你想要控制copy构造的方方面面，必须同时声明泛化copy构造函数和正常的copy构造函数，相同的规则也适用于赋值操作
+
+### 46. Define non-member functions inside templates when type conversions are desired
