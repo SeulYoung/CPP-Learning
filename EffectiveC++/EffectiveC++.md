@@ -4,10 +4,11 @@
 
 ### 1. View C++ as a federation of languages
 
-- C
-- Object-Oriented C++
-- Template C++
-- STL
+- 将C++视为多种相关语言组成的联邦，在其某个次语言中，各种守则都倾向简单易懂并容易记住，然而当你从一个次语言转移到另一个次语言时，守则可能改变
+  - C
+  - Object-Oriented C++
+  - Template C++
+  - STL
 
 ### 2. Prefer consts, enums, and inlines to #defines
 
@@ -99,7 +100,7 @@
   - 转移底层资源的所有权
 - 复制RAII对象必须一并复制它所管理的资源，所以资源的copying行为决定RAII对象的copying行为
 
-### 15. Use the same form in corresponding uses of new and delete
+### 15. Provide access to raw resources in resource-managing classes
 
 - APIs往往要求访问原始资源，因此每一个RAII class都应该提供一个取得其所管理资源的办法
 - 对原始资源的访问可能经由显示转换或隐式转换，一般而言显示转换更为安全，但隐式转换更为方便
@@ -381,7 +382,7 @@
 - template内出现的名称如果相依于某个template参数，称之为从属名称（dependent names），如果从属名称在class内呈嵌套状，则称之为嵌套从属名称（nested dependent name），如果某个名称不依赖于任何template参数，则称之为非从属名称（non-dependent names）
   - 嵌套从属名称有可能导致解析困难，假设现在有`template<typename C> ...`，同时有`C::const_itrator* x;`（注意这并非有效代码），看起来似乎是声明`x`为一个local指针变量
   - 但是，如果`C`有个static成员变量而碰巧被命名为`const_iterator`，或如果`x`碰巧是个global变量名称呢？那样的话上述语句就变成了一个相乘动作（这听起来确实有点疯狂，但C++解析器必须操心所有可能的输入）
-  - 而C++有个规则可以解析此起义状态：如果解析器在template中遭遇一个嵌套从属名称，便假设这名称不是个类型，除非你告诉它，因此缺省情况下嵌套从属名称并非类型
+  - 而C++有个规则可以解析此歧义状态：如果解析器在template中遭遇一个嵌套从属名称，便假设这名称不是个类型，除非你告诉它，因此缺省情况下嵌套从属名称并非类型
 - 请使用关键字`typename`标识嵌套从属类型名称，但不得在base class lists（基类列）或member initialization list（成员初值列）内以它作为base class修饰符
 
 ### 43. Know how to access names in templatized base classes
@@ -418,3 +419,20 @@
   - 因此如果你想要控制copy构造的方方面面，必须同时声明泛化copy构造函数和正常的copy构造函数，相同的规则也适用于赋值操作
 
 ### 46. Define non-member functions inside templates when type conversions are desired
+
+- `Number<T>`是一个template class，考虑non-member函数`template<typename T> const Number<T> operator* (const Number<T>& lhs, const Number<T>& rhs)`，我们希望此模板函数支持混合式算术运算，同时也希望其像条款24那样支持隐式转换，即`2 * Number<int>`这种写法
+  - 但不幸的是，template实参推导过程中，从不将隐式类型转换函数纳入考虑，也就不会考虑利用non-explicit构造函数将`int`转换为`Number<int>`，进而推导出模板参数`T`为`int`
+- 此时我们需要利用“template class内的friend声明式可以指涉某个特定函数”这一事实
+  - 这意味着`class Number<T>`可以声明`operator*`为其friend函数，class templates并不依赖template实参推导（后者只施行于function templates身上），所以编译器总是能在`class Number<T>`具现化时得知`T`的类型
+  - 到这一步，Number内的friend函数声明式为`friend const Number<T> operator* (const Number<T>& lhs, const Number<T>& rhs);`
+    - 现在来想象一下整个过程，当某一对象被声明为`Number<int>`时，`class Number<int>`于是被具现化出来，而作为过程的一部分，friend函数operator*（其接受`Number<int>`参数）也被自动声明出来，此时其身为一个函数而非函数模板，编译器即可在调用它时使用隐式类型转换
+  - 但是将此friend函数声明于Number内，而将定义留在外部，我们最终会收获一个链接错误，为什么呢？
+    - 编译器虽然知道我们要调用哪个函数，但该函数只被声明于Number内，而未被定义，我们意图令class外部的operate* template提供定义式，这是行不通的，一旦我们声明一个函数，那么就有责任定义这个函数
+    - 因此或许最简单可行的办法就是将operator* template函数本体合并至其声明式之内
+- 这项技术的一个趣味点是，虽然使用friend，却与其传统用途“访问class内non-public成分”毫不相干，让我们来回顾一下整个过程
+  - 首先，为了让类型转换可能发生于所有实参之上，我们需要一个non-member函数（如条款24那样）
+  - 然后，为了让这个函数被自动具现化，我们需要将其声明在class template内部
+  - 最终，在class内部声明non-member函数的唯一办法就是，令其成为一个friend，所以我们这样做了
+
+### 47. Use traits classes for information about types
+
