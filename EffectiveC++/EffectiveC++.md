@@ -436,3 +436,133 @@
 
 ### 47. Use traits classes for information about types
 
+- traits classes使得“类型相关信息”在编译期可用，它们以templates和templates特化完成实现
+- 整合重载技术后，traits classes有可能在编译期对类型执行if-then-else判断
+- 如何设计一个traits class
+  - 以迭代器实现为例，我们需要针对不同分类迭代器执行不同的移动操作，因此需要能够判断迭代器的类型信息
+    - 首先这要求每一个“用户定义的迭代器类型”必须嵌套一个typedef，名为iterator_category，例如deque的迭代器支持随机访问，所以看起来可能是这个样子：
+
+      ```C++
+      template< ... > class deque {
+      public:
+        class iterator {
+        public:
+          typedef random_access_iterator_tag iterator_category;
+          ...
+        };
+        ...
+      };
+      ```
+
+    - 至于iterator_traits，只是单纯的响应iterator class的嵌套式typedef，它的实现如下：
+
+      ```C++
+      // 类型IterT的iterator_category其实就是用来表现“IterT说它自己是什么类型”
+      template<typename IterT> struct iterator_traits {
+        typedef typename IterT::iterator_category iterator_category;
+        ...
+      };
+      ```
+
+    - 但是这对用户自定义类型行得通，对指针却行不通，因为指针不可能嵌套typedef，则其专门用来对付指针的实现如下：
+
+      ```C++
+      // 针对指针提供一个偏特化版本
+      template<typename IterT> struct iterator_traits<IterT*> {
+        typedef random_access_iterator_tag iterator_category;
+        ...
+      };
+      ```
+
+  - 现在让我们总结一下traits class的设计过程
+    - 确认若干你希望将来可取得的类型相关信息，例如对迭代器而言，我们希望将来可取得其分类
+    - 为该信息选择一个名字（例如iterator_category）
+    - 提供一个template和一组特化版本，内含你希望支持的类型相关信息
+- 如何使用一个traits class
+  - 当你设计完成iterator_traits后，为了进行类型判断，你可能会写出`if (typeid(typename iterator_traits<IterT>::iterator_category) == typeid(random_access_iterator_tag))`，但这其实是不可取的
+    - 首先，这可能会导致编译问题，其次，IterT类型在编译期间获知，所以iterator_category也可在编译期确定，但if语句却是在运行期才会核定，为什么将可在编译期完成的事情延后到运行期呢？这不仅浪费时间，还会造成可执行文件膨胀
+  - 为了解决这一问题，我们需要利用C++中的重载（overloading）技术，我们利用参数的最佳匹配，来决定调用哪个重载函数，重载函数的部分实现如下：
+
+    ```C++
+    template<typename IterT, typename DistT> void doAdvance(IterT& iter, DistT d, random_access_iterator_tag) {
+      // 为random access类型的迭代器提供实现
+      iter += d;
+    }
+
+    template<typename IterT, typename DistT> void doAdvance(IterT& iter, DistT d, bidirectional_iterator_tag) {
+      // 为bidirectional类型的迭代器提供实现
+      if (d >= 0) { while (d--) ++iter; }
+      else { while (d++) --iter; }
+    }
+    ```
+
+  - 有了这些重载版本，调用函数只需要额外多传递一个对象，即可利用重载解析机制调用适当的代码，例如：
+
+    ```C++
+    template<typename IterT, typename DistT> void advance(IterT& iter, DistT d) {
+      doAdvance(iter, d, typename iterator_traits<IterT>::iterator_category());
+    }
+    ```
+
+  - 现在让我们总结一下traits class的使用过程
+    - 建立一组重载函数或函数模板，彼此间的差异只在于各自的traits参数，令每个函数实现码与其接受之traits信息相对应
+    - 建立一个控制函数或函数模板，它调用上述那一组函数并传递traits class所提供的信息
+
+### 48. Be aware of template metaprogramming
+
+- template metaprogramming（TMP，模板元编程）是编写template-based C++程序并执行于编译期的过程，TMP有两个伟大的效力
+  - 第一，它让某些事情更容易，如果没有它，那些事情将是困难的，甚至不可能的（作者也没说是那些事情）
+  - 第二，由于TMP执行于编译期，因此可将工作从运行期转移到编译期
+    - 因此某些原本在运行期才能侦测到的错误，现在可以在编译期找出来
+    - 而且使用TMP的C++程序可能在每一方面都更高效：较小的可执行文件、较短的运行期、较少的内存需求
+    - 但是代价是，编译时间变长了，可能远长于不使用TMP的对应版本
+- 稍早在条款47中我们谈到，advance函数的typeid实现方式可能会导致编译问题，现在来看下面这个例子：
+
+  ```C++
+  template<typename IterT, typename DistT> void advance(IterT& iter, DistT d) {
+    if (typeid(typename iterator_traits<IterT>::iterator_category) == typeid(random_access_iterator_tag)) {
+      iter += d; // 可能会导致编译问题
+    }
+    else {
+      if (d >= 0) { while (d--) ++iter; }
+      else { while (d++) --iter; }
+    }
+  }
+
+  // 调用代码
+  std::list<int>::iterator iter;
+  ...
+  advance(iter, 10);
+  ```
+
+  - 问题出在使用`+=`操作符的那一行代码，当advance模板函数针对`list<int>::iterator`类型的迭代器进行具现化的时候，会尝试在bidirectional迭代器身上执行`+=`操作，但是其并不支持这一操作，只有random access迭代器才支持
+    - 尽管我们知道，针对`list<int>::iterator`类型迭代器具现化的代码，由于判断条件的存在，执行`+=`操作的这一行代码永远不会执行，所以看似并不会造成问题
+    - 但是编译器必须确保所有的源码都有效，纵使是永远不会执行的代码，而当迭代器类型不是random access迭代器时，`+=`操作就是无效的
+  - 与之相对应的就是traits-based TMP解法，其针对不同类型而进行的代码，被拆分为不同的函数，每个函数所使用的操作都可施行于该函数所对应的类型
+- 为了再次认识一下“事物在TMP中如何运作”，让我们再来看看循环
+  － TMP中并没有真正的循环构件，所以循环效果是借由递归完成的，但TMP的递归甚至不是正常种类，因为TMP循环并不涉及递归函数调用，而是涉及递归模板具现化（recursive template instantiation）
+  - TMP的起手程序是在编译期计算阶乘，阶乘运算示范如何通过递归模板具现化实现循环，以及如何在TMP中创建和使用变量
+
+    ```C++
+    template<unsigned N> struct Factorial {
+      enum { value = N * Factorial<N - 1>::value };
+    };
+    // 特殊情况，0的阶乘为1
+    template<> struct Factorial<0> {
+      enum { value = 1 };
+    };
+    ```
+
+  - 循环发生在template具现体`Factorial<N>`内部指涉另一个template具现体`Factorial<N - 1>`之时，和所有递归一样，需要一个特殊情况造成递归结束，这里的特殊情况是template特化体`Factorial<0>`
+- 为求领悟TMP之所以值得学习，很重要一点就是先对它能够达成什么目标有一个比较好的理解，下面举出三个例子
+  - 确保量度单位正确，如果使用TMP，就可以在编译期确保程序中所有度量单位的组合都正确，不论其计算多么复杂，这也就是为什么TMP可被用来进行早期错误侦测
+  - 优化矩阵运算，假设有一个SquareMatrix class，考虑类似于这样的矩阵连乘运算`SquareMatrix result = m1 * m2 * m3 * m4 * m5;`
+    - 以“正常的”函数调用动作来计算result，会创建4个临时矩阵，每一个用来存储对operate*的调用结果
+    - 如果使用高级、与TMP相关的template技术，即所谓expression templates，就有可能消除那些临时对象并合并循环，于是TMP软件使用较少内存，执行速度也有提升
+  - 可以生成客户定制之设计模式实现品，运用所谓policy-based design之TMP-based技术，有可能产生一些templates用来表述独立的设计选项（所谓policies），然后任意结合它们，导致模式实现品带着客户定制的行为
+
+## Customizing new and delete
+
+### 49. Understand the behavior of the new-handler
+
+
