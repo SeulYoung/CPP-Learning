@@ -193,7 +193,7 @@
 - 假设现有一个class Number，该class允许“int-to-Number”隐式转换，你需要为其实现一个`operator*`操作
   - 此时你的直觉告诉你应该保持面向对象精神，将其实现为成员函数，写法为`const Number operator* (const Number& rhs) const`
     - 很快你就会发现，当你尝试混合式算术时只有一半行得通，即`Number * 2`行得通，但`2 * Number`却会出错，如果你以函数形式重写两式为`Number.operator*(2)`和`2.operator*(Number)`，问题一目了然
-    - 结论是，只有当参数被列于参数列表内，这个参数才是隐式类型转换的合格参与者，而“被调用之成员函数所隶属的那个对象”，即`this`对象这个隐喻参数，绝不是隐式转换的合格参与者，这也解释了为什么`2 * Number`为什么会出错，此时你并能指望编译器自动将数字隐式转换为Number，然后调用`operator*`成员函数
+    - 结论是，只有当参数被列于参数列表内，这个参数才是隐式类型转换的合格参与者，而“被调用之成员函数所隶属的那个对象”，即`this`对象这个隐喻参数，绝不是隐式转换的合格参与者，这也解释了为什么`2 * Number`为什么会出错，此时你并不能指望编译器自动将数字隐式转换为Number，然后调用`operator*`成员函数
   - 最终，可行之道拨云见日，让`operator*`成为一个non-member函数，这允许编译器在每一个实参身上执行隐式转换，写法为`const Number operator* (const Number& lhs, const Number& rhs)`
 - 最后，请记住，如果你需要为某个函数的所有参数（包括被this指针所指的那个隐喻参数）进行类型转换，那么这个函数必须是个non-member函数
 
@@ -565,4 +565,121 @@
 
 ### 49. Understand the behavior of the new-handler
 
+- 当operator new抛出异常以反映一个未获满足的内存需求之前，它会先调用一个客户指定的错误处理函数，一个所谓的new-handler
+  - 为了指定这个“用以处理内存不足”的函数，必须使用set_new_handler函数，set_new_handler函数的参数是一个没有参数且返回值为void的函数指针，set_new_handler函数的返回值也是个指针，指向该函数被调用前正在执行（但马上就要被替换）的那个new-handler函数
+  - 顺带一提，如果new-handler函数执行期间必须动态分配内存，考虑会发生什么事...
+- 当operator new无法满足内存申请时，它会不断调用new-handler函数，直到找到足够的内存，因此一个设计良好的new-handler函数必须做以下事情（多个或之一）
+  - 让更多内存可被使用，这或许可使下一次分配内存成功，实现此策略的一个做法是，程序一开始执行就分配一大块内存，而后当new-handler第一次被调用，将内存释放归还程序
+  - 安装另一个new-handler，如果目前这个handler无法取得更多内存，或许让其安装另外某个有此能力的new-handler，下次再调用时，就会调用新的new-handler
+  - 卸载new-handler，也就是将null指针传递给set_new_handler，这样当operator new内存分配失败时就会抛出异常
+  - 抛出bad_alloc异常，这样的异常不会被operator new捕获，因此会被传递到调用处
+  - 不返回，通常调用abort或exit，这样就会终止程序执行
+- C++并不支持class专属的new-handler，但你可以自己实现出这种行为，只需令每一个class提供自己的set_new_handler和operator new即可
+  - 其中set_new_handler使用户得以指定class专属的new-handler，就像标准的set_new_handler允许指定global new-handler
+  - 至于operator new，则确保在分配class对象内存的过程中以class专属的new-handler替换global new-handler
+  - 实现这一方案的代码并不因class的不同而不同，因此可以建立一个“mixin”风格的base class，然后将这个class转换为template，借助于template的特性，使每个derived class获得实体互异的data成员变量
 
+    ```C++
+    template<typename T> class NewHandlerSupport { // mixin风格的base class
+    public:
+      explicit NewHandlerSupport(std::new_handler p) : currentHandler(p) {}
+      ~NewHandlerSupport() { std::set_new_handler(currentHandler); } // RAII，析构时恢复global new-handler
+
+      static std::new_handler set_new_handler(std::new_handler p) throw();
+      static void* operator new(std::size_t size) throw(std::bad_alloc);
+      ...
+    private:
+      static std::new_handler currentHandler; // 模板具现化后用以支持class专属的new-handler
+    };
+
+    template<typename T> std::new_handler NewHandlerSupport<T>::set_new_handler(std::new_handler p) throw() {
+      std::new_handler oldHandler = currentHandler;
+      currentHandler = p;
+      return oldHandler;
+    }
+
+    template<typename T> void* NewHandlerSupport<T>::operator new(std::size_t size) throw(std::bad_alloc) {
+      NewHandlerHolder h(std::set_new_handler(currentHandler)); // 以class专属的new-handler替换global new-handler
+      return ::operator new(size);
+    }
+
+    template<typename T> std::new_handler NewHandlerSupport<T>::currentHandler = 0;
+    ```
+
+  - 假设现有Widget class，利用上述代码为其添加set_new_handler的支持能力就轻而易举了
+
+    ```C++
+    class Widget : public NewHandlerSupport<Widget> {
+      ... // 无需声明set_new_handler和operator new
+    };
+
+    // 用法
+    void outOfMem();
+    Widget::set_new_handler(outOfMem);
+    Widget* pw = new Widget; // 若内存分配失败，将调用outOfMem
+    std::string* ps = new std::string; // 若内存分配失败，将调用global new-handler
+    ```
+  
+  - 或许你会对这个方案感到不可思议，甚至会因为模板参数从未使用而焦虑万分，但是实际上T的确不需被使用，我们只是希望继承自NewHandlerSupport的每个class都有实体互异的static data成员变量，模板参数只是用来区分不同的derived class而已
+  - 由于这是一个十分有用的技术，因为它有一个名字“怪异的循环模板模式（curiously recurring template pattern, CRTP）”，但是需要注意的是，这种风格的继承极有可能导致多重继承问题，因此在使用时务必小心
+- 新一代的operator new会抛出bad_alloc异常，但是C++仍然提供了传统的“分配失败便返回null”的行为，这个形式被称为“nothrow”形式，例如`T* p = new (std::nothrow) T`
+  - 但其是一个颇为局限的工具，因为它只适用于内存分配，只能保证operator new不抛出异常，如果类的构造函数抛出异常，异常会一如既往地传播
+
+### 50. Understand when it makes sense to replace new and delete
+
+- 为了检测运行错误。例如可以超额分配一些内存，在用户分配所得区块之前或之后放置特定的byte pattern（即签名，signatures），在释放内存的时候检查上述签名是否原封不动，从而检查并记录内存越界错误
+- 为了收集动态分配内存的使用统计数据。在定制自己的new和delete之前，理应先收集软件如何使用其动态内存，分配区块大小分布如何？寿命分布如何？倾向于FIFO（先进先出）次序或LIFO（后进先出）次序或随机次序来分配和归还？任何时刻所使用的最大分配量是多少等等
+- 为了强化效能，增加分配和归还内存的速度。编译器所带的new和delete主要用于一般目的，需要兼顾各种情况，无论是大块内存、小块内存、大小混合内存，因此编译器采取了中庸之道，但是如果你对动态内存运用形态有深刻的理解，你可以为特定的情况编写更为高效的new和delete
+- 为了降低缺省内存管理器带来的空间额外开销。泛用型内存管理器可以往往还是用更多的内存，因为其常常在每一个分配区块身上招引某些额外开销
+- 为了弥补缺省分配器中的非最佳齐位。例如在x86体系结构上double在8-byte齐位时访问最是迅速，但是缺省分配器可能并不保证分配而得的double是8-byte齐位的，这种情况下实现定制分配器可能会大幅提升程序效率
+- 为了将相关对象成簇集中。如果你确定某个数据结构往往被一起使用，又希望处理这些数据时内存页错误（page faults）的频率降至最低，那么可为此数据结构创建一个heap使其被集中在尽可能少的内存页上
+- 为了获得非传统行为。例如可能希望分配或归还共享内存（shared memory）内的区块，但唯一能管理该内存的只有C API函数，那么编写一个定制版管理器，你便得以为C API穿上C++外套
+
+### 51. Adhere to convention when writing new and delete
+
+- operator new应该内含一个无穷循环，并在其中尝试分配内存，如果无法满足内存需求，就应该调用new-handler，它也应该有能力处理0-byte申请，如果是Class专属版本则还应该处理“比正确大小更大的（错误）申请”
+- operator delete应该在收到null指针时不做任何事情，如果是Class专属版本则还应该处理“比正确大小更大的（错误）释放”
+
+### 52. Write placement delete if you write placement new
+
+- 缺省情况下，C++在global作用域内提供了以下形式的operator new
+  - `void* operator new(std::size_t) throw(std::bad_alloc); // normal new`
+  - `void* operator new(std::size_t, void* p) throw(); // placement new`
+  - `void* operator new(std::size_t, const std::nothrow_t&) throw(); // nothrow new`
+- 当你编写class专属的operator new，并以placement new的形式分配内存时，你必须提供与之参数相对应的placement delete，否则会引起难以察觉的内存泄漏
+  - 考虑`Widget *pw = new (std::cerr) Widget;`，此操作会调用operator new并传递cer为其第二个参数，如果缺少与之对应的placement delete，这个操作会在构造函数抛出异常时导致内存泄漏
+  - 我们知道，`new`关键字的背后会有两个函数被调用，一个是operator new，另一个是构造函数，如果operator new成功分配内存，但是构造函数抛出异常，那么C++必须调用与operator new对应的operator delete来释放内存
+  - 然而C++无法知道真正被调用的那个operator new如何运作，因此其只能寻找“参数个数和类型都与operator new相同”的某个operator delete，如果找不到，那么没有任何operator delete会被调用
+- 当你声明placement new和placement delete时，请确定不要无意识地遮掩了它们的正常版本
+  - 例如，成员函数名称会遮掩外围作用域中相同的名称（见条款33）
+  - 同样的，derived class中的operator new也会遮掩global版本和继承而来的版本
+
+## Miscellany
+
+### 53. Pay attention to compiler warnings
+
+- 严肃对待编译器发出的警告信息，努力在编译器最高警告级别下争取“无任何警告”的荣誉
+- 例如，考虑如下代码
+  
+  ```cpp
+  class B {
+  public:
+    virtual void f() const;
+  }
+
+  class D : public B {
+  public:
+    virtual void f();
+  }
+  ```
+
+  - 你所期望的是以D::f()重新定义virtual函数B::f()，但是却忽略了`const`关键字，作者的编译器给出警告“warning: D::f() hides virtual B::f()”
+  - 其实这是编译器试图告诉你声明于B中的函数f()并未在D中被重新声明，而是被整个遮掩了，如果忽略这个错误，几乎可以肯定会导致错误的程序行为
+
+### 54. Familiarize yourself with the standard library, including TR1
+
+- C++标准程序库的主要机能由STL、iostreams、multiple active locales组成
+
+### 55. Familiarize yourself with Boost
+
+- Boost是致力于免费和源码开放的C++程序库，其在C++标准化过程中扮演深具影响力的角色
