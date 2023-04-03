@@ -430,33 +430,61 @@
 ### 41. Understand implicit interfaces and compile-time polymorphism
 
 - C++中面向对象编程的世界总是以显式接口（explicit interface）和运行期多态（runtime polymorphism）解决问题
-  - 对class而言接口是显式且以函数签名为中心的，多态则通过virtual函数发生于运行期
+  - 对class而言接口是显式且以函数签名（也就是函数名称，参数类型、返回类型）为中心的，多态则通过virtual函数发生于运行期
 
 - 但Template和泛型编程的世界，与面向对象有根本上的不同，此世界中则是以隐式接口（implicit interface）和编译期多态（compile-time polymorphism）解决问题
   - 对template参数而言，接口是隐式的，奠基于有效表达式，多态则是通过template具现化和函数重载解析（function overloading resolution）发生于编译器
+  - 以如下代码为例，所谓有效表达式，是指`w`必须支持哪种接口，由template中执行于`w`身上的操作来决定，凡是涉及`w`的任何函数调用，例如`operator<`和`operator!=`，都有可能造成template具现化，“以不同的template参数具现化function templates”会调用不同的函数，这便是所谓的编译期多态
 
-- “运行期多态”和“编译期多态”类似于“哪一个重载函数该被调用（发生在编译期）”和“哪一个virtual函数该被绑定（发生在运行期）”之间的差异
+  ```C++
+  template<typename T> void doProcessing(T& w);
+  {
+    // w必须提供名为size的成员函数，且返回值类型为size_t
+    // w必须支持operator!=函数，用来比较两个T对象
+    if (w.size() > 10 && w != someNastyWidget) {
+      T temp(w);
+      temp.normalize();
+      temp.swap(w);
+    }
+  }
+  ```
+
+- “编译期多态”和“运行期多态”类似于“哪一个重载函数该被调用（发生在编译期）”和“哪一个virtual函数该被绑定（发生在运行期）”之间的差异
 
 ### 42. Understand the two meanings of typename
 
 - 从C++的角度看，声明template参数时，不论使用关键字`class`还是`typename`，意义完全相同
 
 - template内出现的名称如果相依于某个template参数，称之为从属名称（dependent names），如果从属名称在class内呈嵌套状，则称之为嵌套从属名称（nested dependent name），如果某个名称不依赖于任何template参数，则称之为非从属名称（non-dependent names）
-  - 嵌套从属名称有可能导致解析困难，假设现在有`template<typename C> ...`，同时有`C::const_iterator* x;`（注意这并非有效代码），看起来似乎是声明`x`为一个local指针变量
-  - 但是，如果`C`有个static成员变量而碰巧被命名为`const_iterator`，或如果`x`碰巧是个global变量名称呢？那样的话上述语句就变成了一个相乘动作（这听起来确实有点疯狂，但C++解析器必须操心所有可能的输入）
+  - 嵌套从属名称有可能导致解析困难，假设现在有模板函数`template<typename C> print2nd(const C& container) { ... }`，函数中有语句`C::const_itrator* iter;`（注意这并非有效代码），看起来似乎是声明`iter`为一个local指针变量，指向`C::const_itrator`
+  - 但是，如果`C::const_itrator`不是个类型呢？如果`C`有个static成员变量而其碰巧被命名为`const_iterator`呢？或如果`iter`碰巧是个global变量名称呢？那样的话上述语句就变成了一个相乘动作（这听起来确实有点疯狂，但C++解析器必须操心所有可能的输入）
   - 而C++有个规则可以解析此歧义状态：如果解析器在template中遭遇一个嵌套从属名称，便假设这名称不是个类型，除非你告诉它，因此缺省情况下嵌套从属名称并非类型
 
 - 请使用关键字`typename`标识嵌套从属类型名称，但不得在base class lists（基类列）或member initialization list（成员初值列）内以它作为base class修饰符
+
+  ```C++
+  template<typename T>
+  class Derived: public Base<T>::Nested { // base class list中不允许typename
+  public:
+    explicit Derived(int x)
+    : Base<T>::Nested(x) { // member initialization list中不允许typename
+      typename Base<T>::Nested temp; // 嵌套从属类型名称，需加上typename
+      ...
+    }
+  };
+  ```
 
 ### 43. Know how to access names in templatized base classes
 
 - C++往往拒绝在templatized base classes（模板化基类）内寻找继承而来的名称，那是因为base class templates有可能被特化，而特化版本可能不提供和一般性template相同的接口
   - 就某种意义而言，当我们从Object Oriented C++跨进Template C++时，继承就不像以前那般畅行无阻了
 
-- 为了使C++不进入templatized base classes观察的行为失效，有三种办法
+- 为了使C++“不进入templatized base classes观察可调用之函数”的行为失效，有三种办法
   - 第一，在base class函数调用动作之前加上`this->`
-  - 第二，使用using声明式，告诉编译器进入base class作用域内查找
-  - 第三，使用`Base<type>::func()`明确指出被调用的函数位于base class内，但这往往是最不让人满意的一个解法，因为如果被调用的是virtual函数，这种明确资格修饰（explicit qualification）会关闭virtual绑定行为
+  - 第二，使用using声明式，如果你还记得条款33，此方法会让你感到熟悉，但其实两处要解决的问题并不相同
+    - 条款33是描述using声明式如何将“被掩盖的base class名称”带入derived class作用域内
+    - 而此处并不是因为base class名称被derived class名称掩盖，而是编译器拒绝进入base class作用域内查找，于是我们使用using告诉它，请它这么做
+  - 第三，使用`Base<T>::func()`明确指出被调用的函数位于base class内，但这往往是最不让人满意的一个解法，因为如果被调用的是virtual函数，这种明确资格修饰（explicit qualification）会关闭virtual绑定行为
 
 - 从名称可视点（visibility point）的角度出发，上述每一个解法做的事情都相同，对编译器承诺“base class template的任何特化版本都将支持其一般泛化版本所提供的接口”，但如果这个承诺最终未被实践，往后的编译最终还是会面临失败
 
@@ -465,6 +493,15 @@
 - Templates生成多个classes和多个函数，所以任何template代码都不该与某个造成膨胀的template参数产生相依关系
 
 - 因非类型模板参数（non-type template parameters）而造成的代码膨胀，往往可消除，做法是以函数参数或class成员变量替换template参数
+
+  ```C++
+  template<typename T, std::size_t n> class SquareMatrix {
+  public:
+    ...
+    // 求逆矩阵，该函数除了使用矩阵的大小不同外，其余代码完全相同，但是该函数会在每个具现化的class内都出现一份
+    // 因此可以建立一个带参数的函数，将n作为参数传入，而不重复代码
+    void invert();
+  }
 
 - 因类型参数（type parameters）而造成的代码碰撞，往往可降低，做法是让带有完全相同二进制表述（binary representations）的具现类型共享实现码
   - 例如大多数平台上，所有指针类型都有相同的二进制表述，因此templates持有指针者（如`list<int*>`和`list<SquareMatrix<long, 3>*`等等）往往应该对每一个成员函数使用唯一一份底层实现
@@ -481,13 +518,27 @@
   - 上述泛化copy构造函数并未声明为explicit，因为原始指针类型之间的转换是隐式转换，所以仿效这种行为也属合理
 
 - 但是还有另一个问题需要解决，那就是我们希望根据`SmartPtr<Derived>`创建`SmartPtr<Base>`，但是却不希望根据`SmartPtr<Base>`创建`SmartPtr<Derived>`，或根据`SmartPtr<double>`创建`SmartPtr<int>`，因此我们必须从某方面对这一member template所创建的成员函数群进行拣选或筛除
-  - 假设SmartPtr内有原始指针成员变量`T* heldPtr;`，则可以用`template<typename U> SmartPtr(const SmartPtr<U>& other) : heldPtr(other.getPtr()) { ... }`来实现代码中约束转换行为
-  - 使用成员初始列表来初始化`SmartPtr<T>`之内类型为`T*`的成员变量，并以类型为`U*`的指针作为初值，这个行为只有当“存在某个隐式转换可将`U*`指针转换为`T*`指针”时才能通过编译
+  - 假设SmartPtr内有原始指针成员变量`T* heldPtr;`，则可以用`template<typename U> SmartPtr(const SmartPtr<U>& other) : heldPtr(other.getPtr()) { ... }`来实现代码中约束转换行为，此处`other.getPtr()`的返回值类型为`U*`
+  - 使用成员初始列表来初始化`SmartPtr<T>`之内`T* heldPtr`成员变量，以类型为`U*`的指针作为其初值，这个行为只有当“存在某个隐式转换可将`U*`指针转换为`T*`指针”时才能通过编译，最终效益是`SmartPtr<T>`现在有了一个泛化copy构造函数，这个构造函数只在其所获得的实参隶属于兼容类型时才通过编译
 
-- member function template（成员函数模板）的效用不限于构造函数，常用的另一方面是支持赋值操作的兼容行为
+- member function template（成员函数模板）的效用不限于构造函数，常用的另一方面是支持赋值操作的兼容行为，例如TR1规范中关于shared_ptr的一份摘录
 
-- member function template是个奇妙的东西，但它们并不改变语言的基本规则，例如在class内声明泛化copy构造函数（一个member template）并不会阻止编译器生成它们自己的copy构造函数（一个non-template）
-  - 因此如果你想要控制copy构造的方方面面，必须同时声明泛化copy构造函数和正常的copy构造函数，相同的规则也适用于赋值操作
+  ```C++
+  template<class T> class shared_ptr {
+  public:
+    template<class Y> explicit shared_ptr(Y* p); // 构造，可来自任何兼容的内置指针
+    template<class Y> shared_ptr(shared_ptr<Y> const& r); // 或shared_ptr
+    template<class Y> shared_ptr(weak_ptr<Y> const& r); // 或weak_ptr
+    template<class Y> shared_ptr(auto_ptr<Y> const& r); // 或auto_ptr
+    template<class Y> shared_ptr& operator=(shared_ptr<Y> const& r); // 赋值，可来自任何兼容的shared_ptr
+    template<class Y> shared_ptr& operator=(auto_ptr<Y> const& r); // 或auto_ptr
+    ...
+  };
+  ```
+
+- member function template是个奇妙的东西，但它们并不改变语言的基本规则，规则表明，如果程序需要一个copy构造函数，你却没有声明它，编译器就会暗自为你生成一个
+  -因此在class内声明泛化copy构造函数（一个member template）并不会阻止编译器生成它们自己的copy构造函数（一个non-template）
+  - 因此如果你想要控制copy构造的方方面面，必须同时声明泛化copy构造函数和正常的copy构造函数，相同的规则也适用于赋值操作，例如在shared_ptr内声明copy构造函数`shared_ptr(shared_ptr const& r);`
 
 ### 46. Define non-member functions inside templates when type conversions are desired
 
@@ -495,7 +546,7 @@
   - 但不幸的是，template实参推导过程中，从不将隐式类型转换函数纳入考虑，也就不会考虑利用non-explicit构造函数将`int`转换为`Number<int>`，进而推导出模板参数`T`为`int`
 
 - 此时我们需要利用“template class内的friend声明式可以指涉某个特定函数”这一事实
-  - 这意味着`class Number<T>`可以声明`operator*`为其friend函数，class templates并不依赖template实参推导（后者只施行于function templates身上），所以编译器总是能在`class Number<T>`具现化时得知`T`的类型
+  - 这意味着`class Number<T>`可以声明`operator*`为其friend函数，class templates并不依赖template实参推导（实参推导只施行于function templates身上，此处可能有些难以理解，后面有过程解释），所以编译器总是能在`class Number<T>`具现化时得知`T`的类型
   - 到这一步，Number内的friend函数声明式为`friend const Number<T> operator* (const Number<T>& lhs, const Number<T>& rhs);`
     - 现在来想象一下整个过程，当某一对象被声明为`Number<int>`时，`class Number<int>`于是被具现化出来，而作为过程的一部分，friend函数operator*（其接受`Number<int>`参数）也被自动声明出来，此时其身为一个函数而非函数模板，编译器即可在调用它时使用隐式类型转换
   - 但是将此friend函数声明于Number内，而将定义留在外部，我们最终会收获一个链接错误，为什么呢？
