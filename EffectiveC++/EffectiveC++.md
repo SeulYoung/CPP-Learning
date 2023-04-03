@@ -442,7 +442,7 @@
 - 从C++的角度看，声明template参数时，不论使用关键字`class`还是`typename`，意义完全相同
 
 - template内出现的名称如果相依于某个template参数，称之为从属名称（dependent names），如果从属名称在class内呈嵌套状，则称之为嵌套从属名称（nested dependent name），如果某个名称不依赖于任何template参数，则称之为非从属名称（non-dependent names）
-  - 嵌套从属名称有可能导致解析困难，假设现在有`template<typename C> ...`，同时有`C::const_itrator* x;`（注意这并非有效代码），看起来似乎是声明`x`为一个local指针变量
+  - 嵌套从属名称有可能导致解析困难，假设现在有`template<typename C> ...`，同时有`C::const_iterator* x;`（注意这并非有效代码），看起来似乎是声明`x`为一个local指针变量
   - 但是，如果`C`有个static成员变量而碰巧被命名为`const_iterator`，或如果`x`碰巧是个global变量名称呢？那样的话上述语句就变成了一个相乘动作（这听起来确实有点疯狂，但C++解析器必须操心所有可能的输入）
   - 而C++有个规则可以解析此歧义状态：如果解析器在template中遭遇一个嵌套从属名称，便假设这名称不是个类型，除非你告诉它，因此缺省情况下嵌套从属名称并非类型
 
@@ -468,7 +468,7 @@
 
 - 因类型参数（type parameters）而造成的代码碰撞，往往可降低，做法是让带有完全相同二进制表述（binary representations）的具现类型共享实现码
   - 例如大多数平台上，所有指针类型都有相同的二进制表述，因此templates持有指针者（如`list<int*>`和`list<SquareMatrix<long, 3>*`等等）往往应该对每一个成员函数使用唯一一份底层实现
-  - 如果你实现某些成员函数而它们操作强类型指针（strongly typed pointers，即T*），你应该令它们调用另一个操作无类型指针（untyped pointers，即void*）的函数，由后者完成实际工作
+  - 如果你实现某些成员函数而它们操作强类型指针（strongly typed pointers，即`T*`），你应该令它们调用另一个操作无类型指针（untyped pointers，即`void*`）的函数，由后者完成实际工作
 
 ### 45. Use member function templates to accept "all compatible types"
 
