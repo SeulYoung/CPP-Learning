@@ -456,8 +456,8 @@
 - 从C++的角度看，声明template参数时，不论使用关键字`class`还是`typename`，意义完全相同
 
 - template内出现的名称如果相依于某个template参数，称之为从属名称（dependent names），如果从属名称在class内呈嵌套状，则称之为嵌套从属名称（nested dependent name），如果某个名称不依赖于任何template参数，则称之为非从属名称（non-dependent names）
-  - 嵌套从属名称有可能导致解析困难，假设现在有模板函数`template<typename C> print2nd(const C& container) { ... }`，函数中有语句`C::const_itrator* iter;`（注意这并非有效代码），看起来似乎是声明`iter`为一个local指针变量，指向`C::const_itrator`
-  - 但是，如果`C::const_itrator`不是个类型呢？如果`C`有个static成员变量而其碰巧被命名为`const_iterator`呢？或如果`iter`碰巧是个global变量名称呢？那样的话上述语句就变成了一个相乘动作（这听起来确实有点疯狂，但C++解析器必须操心所有可能的输入）
+  - 嵌套从属名称有可能导致解析困难，假设现在有模板函数`template<typename C> print2nd(const C& container) { ... }`，函数中有语句`C::const_iterator* iter;`（注意这并非有效代码），看起来似乎是声明`iter`为一个local指针变量，指向`C::const_iterator`
+  - 但是，如果`C::const_iterator`不是个类型呢？如果`C`有个static成员变量而其碰巧被命名为`const_iterator`呢？或如果`iter`碰巧是个global变量名称呢？那样的话上述语句就变成了一个相乘动作（这听起来确实有点疯狂，但C++解析器必须操心所有可能的输入）
   - 而C++有个规则可以解析此歧义状态：如果解析器在template中遭遇一个嵌套从属名称，便假设这名称不是个类型，除非你告诉它，因此缺省情况下嵌套从属名称并非类型
 
 - 请使用关键字`typename`标识嵌套从属类型名称，但不得在base class lists（基类列）或member initialization list（成员初值列）内以它作为base class修饰符
