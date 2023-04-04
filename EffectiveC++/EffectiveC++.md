@@ -502,6 +502,7 @@
     // 因此可以建立一个带参数的函数，将n作为参数传入，而不重复代码
     void invert();
   }
+  ```
 
 - 因类型参数（type parameters）而造成的代码碰撞，往往可降低，做法是让带有完全相同二进制表述（binary representations）的具现类型共享实现码
   - 例如大多数平台上，所有指针类型都有相同的二进制表述，因此templates持有指针者（如`list<int*>`和`list<SquareMatrix<long, 3>*`等等）往往应该对每一个成员函数使用唯一一份底层实现
