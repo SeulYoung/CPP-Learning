@@ -538,7 +538,7 @@
   ```
 
 - member function template是个奇妙的东西，但它们并不改变语言的基本规则，规则表明，如果程序需要一个copy构造函数，你却没有声明它，编译器就会暗自为你生成一个
-  -因此在class内声明泛化copy构造函数（一个member template）并不会阻止编译器生成它们自己的copy构造函数（一个non-template）
+  - 因此在class内声明泛化copy构造函数（一个member template）并不会阻止编译器生成它们自己的copy构造函数（一个non-template）
   - 因此如果你想要控制copy构造的方方面面，必须同时声明泛化copy构造函数和正常的copy构造函数，相同的规则也适用于赋值操作，例如在shared_ptr内声明copy构造函数`shared_ptr(shared_ptr const& r);`
 
 ### 46. Define non-member functions inside templates when type conversions are desired
