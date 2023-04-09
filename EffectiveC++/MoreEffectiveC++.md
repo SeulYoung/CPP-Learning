@@ -415,6 +415,8 @@
       - 后者语句块则重新抛出一个新的exception，其类型总是widget，因为那是`w`的静态类型，所以一般而言你总是应该使用第一种抛出方式
 
       ```C++
+      // 函数调用过程中将一个临时对象传递给non-const reference参数是不允许的
+      // 但是如下代码你可能注意到一些不同，还记得异常抛出总是会发生复制吗？异常传播可以用by reference的方式捕捉被抛出的对象（必为临时对象）
       catch (Widget &w) { throw; } // 重新抛出当前的exception
       catch (Widget &w) { throw w; } // 抛出的是当前exception的副本
       ```
@@ -430,15 +432,94 @@
 
 ### 13. Catch exceptions by reference
 
+- 首先让我们考虑catch by pointer，理论上将一个exception从抛出端搬移到捕捉端是一个缓慢的过程，而by pointer应该是最有效率的一种做法，因为throw by pointer是唯一在搬移“异常相关信息”时不需复制对象的做法（见条款12）
+  - 看起来很美好，但是程序员面临着如何让exception objects在控制权离开那个“抛出指针”的函数之后依然存在，或许你会希望使用heap-based对象，但是这样做的代价是昂贵的，而且你必须时刻面对资源泄露的问题
+  - 而且catch by pointer和语言本身建立起来的惯例也有所矛盾，4个标准的exceptions统统都是对象，而不是指针，所以你无论如何必须以by value或by reference的方式捕捉它们
+
+- 其次是catch by value，这种方式可以消除上述catch by pointer所面临的部分问题，但是此情况下，每次exception objects被抛出，都需要复制两次，而且会面临到对象切割（slicing）的问题
+  - 复制两次的代价体现在，例如有`catch (Widget w) ...`，一次构造动作是“任何exceptions都会产生临时对象”身上，另一次构造动作是“将临时对象复制到`w`”身上
+  - 对象切割是因为derived class exception objects被捕捉并视为base class exception objects，这将失去其派生成分，如此被切割过的对象其实就是base class objects，他们缺少derived class data members，当虚函数在其上被调用时会被解析为base class的虚函数（这和对象以by value方式传递给函数时所发生的事情一样）
+
+- 最后就是catch by reference，这种方式不需要考虑指针对象的删除问题，也不会面临对象切割问题，且只会被复制一次，所以毫无疑问这就是你想要的方式
+
 ### 14. Use exception specifications judiciously
 
+- 对exception specifications保有持平的观点至为重要，在将它们加入函数之前，请考虑所带来的程序行为是否真的是你所想要的
+  - 它们对于函数“希望抛出什么样的exceptions”提供了卓越的说明，而且在“违反exception specifications以至于需要立刻结束程序的悲惨”情况下，它们也提供了`set_unexpected`允许你指定默认行为
+  - 但是它们也有一些缺点，包括编译器只对它们做局部性检测，因此很容易被不经意的违反，此外它们可能会妨碍更上层的exception处理函数处理未预期的exceptions
+
 ### 15. Understand the costs of exception handling
+
+- 为了能够在运行时期处理exceptions，程序必须做大量簿记工作，exceptions的处理需要成本，即使你从未使用关键词try、throw或catch，你可能也必须付出至少某些成本
+  - 在每一个执行点，它们必须能够确认“如果发生exception，哪些对象需要析构”，它们必须在每一个try语句块的进入点和离开点做记号，针对每个try语句块它们必须记录对应的catch子句及能够处理的exceptions类型，这些簿记工作必须付出代价
+  - 运行时期的比对工作（以确保符合exception specifications）不是免费的，exception被抛出时销毁适当对象并找出正确的catch子句也不是免费的。
+
+- 认识到异常背后的成本，但是却也不要过度敏感，为了将异常相关的成本最小化，只要能够不支持异常，编译器便不支持，你也需要将异常相关的使用限制于非用不可的地点，并且在真正异常的情况下才抛出exceptions
 
 ## Efficiency
 
 ### 16. Remember the 80-20 rule
 
+- 80-20法则所表达的重点在于：软件的整体性能几乎总是由其构成要素（代码）的一小部分决定的
+  - 当你希望找到瓶颈所在时，避免使用猜测的方法，无论是用经验猜，还是用直觉猜，因为程序的性能特质倾向高度的非直觉性
+  - 可行之道就是完全根据观察或实验来识别出那20%的代码，而辨识之道就是借助某个程序分析器
+
 ### 17. Consider using lazy evaluation
+
+- lazy evaluation是一种技术，它可以让你延迟计算某些值，直到它们真正被需要为止，毕竟从效率的观点来看，最好的运算是从未被执行的运算，毕竟这不花费任何时间，lazy evaluation可在多种场合派上用场，此处描述四种用途
+
+- 引用计数（Reference Counting）
+  - 例如字符串拷贝`String s2 = s1;`，常见的做法就是调用`new` operator分配heap内存，然后再将s1的数据复制到s2所分配的内存中，其实此时s2尚未真正需要实际内容，因为s2尚未被使用
+  - lazy evaluation可以省下许多工作，我们让s2分享s1的值，而不再给予s2一个“s1的内容副本”，但是需要做的就是一些记录工作，让我们知道谁共享了什么东西
+  - 数据共享的唯一危机是在其中某个字符串被修改时发生，此时应该只有一个字符串被修改，因此此时我们再不能做任何拖延了，必须将s2的内容做一个副本，这样就可以安全地修改了
+  - 这种“数据共享”的观念便是lazy evaluation，在真正需要之前，不必着急为某物做一个副本，取而代之的是使用拖延战术，只要还能够，就使用其他副本，如果足够幸运，你可能永远不需要为其提供一个副本
+
+- 区分读和写
+  - 考虑有一个字符串`String s = "hello";`，且有对其操作`cout << s[3];`和`s[3] = 'x';`，第一个动作用来读取字符串的某部分，第二个动作则执行一个写入动作
+  - 当我们使用reference-counted字符串时，毫无疑问我们希望能够区分两者，因为读取动作代价十分低廉，但是写入动作却可能需要为其先做出一个副本
+  - 那么我们是否能够区分`opeartor[]`是在读或写的环境下被调用呢？答案很残忍，我们无能为力，然而如果运用lazy evaluation和条款30描述的proxy classes，我们可以延缓决定“究竟是读还是写”，直到能够确定其答案为止
+
+- 缓式取出（Lazy Fetching）
+  - 假设现在程序中有一个大型对象`class LargeObject {...};`，其中包含许多字段，该对象存储于数据库中，现在考虑从磁盘中恢复一个LargeObject所需的成本，此成本可能极高，尤其是这些数据必须从远程数据库中取出时，而后续使用中可能只有少数字段被访问，所以恢复其他字段的成本就是浪费
+  - 此问题的lazy evaluation做法是，在产生LargeObject对象时，只产生该对象的“外壳”，不从磁盘读取任何数据，当某个字段被需要时，程序才从数据库中取回对应的数据，下面是一个代码示例
+
+    ```C++
+    class LargeObject {
+    public:
+      LargeObject(ObjectID id);
+      const string& field1() const;
+      int field2() const;
+      ...
+
+    private:
+      ObjectID id_;
+      mutable string *field1_; // mutable保证了字段在const member function中也能被修改
+      mutable int *field2_;
+      ...
+    };
+
+    LargeObject::LargeObject(ObjectID id)
+      : id_(id), field1_(0), field2_(0), ...
+    {}
+
+    const string& LargeObject::field1() const
+    {
+      if (!field1_) {
+        // 从数据库中取出field1_
+      }
+      return *field1_;
+    }
+    ```
+
+    - 由于LargeObject内的指针，所以我们不得不面对一个问题，就是在使用之前必须对其进行测试，防止指针是无效的，但幸运的是如此单调乏味的苦工可由smart pointer（条款28）自动完成
+
+- 表达式缓评估（Lazy Expression Evaluation）
+  - lazy evaluation的这一例子更多用于数值应用，例如有矩阵`Matrix<int> m3 = m1 * m2;`，不用说，这个乘法运算的成本是很高的，因此不如我们记录下这个乘法运算（例如由两个指针和一个enum构成的数据结构），直到真正需要结果时再进行计算，甚至有可能因为程序逻辑更改执行路线，我们再也不需要计算此结果了
+  - 另一个更常见的例子是`cout << m3[4];`，我们只需要大型计算中的部分运算结果，而不是整个结果，虽然此时无法再采用拖延战术，但是也不要过度热心，因为没理由在此刻计算第四行之外的任何值，幸运的话，也许根本不必计算它们
+  - 但是由于必须存储数值间的相依关系，而且必须维护一些数据结构以存储数值、相依关系，或是两者的组合，此外还必须将赋值、复制、加法等操作符进行重载，所以要达成lazy evaluation的目的，在数值运算领域有许多工作要做
+
+- 尽管lazy evaluation在许多领域都有用途，但是其并非永远都是个好主意，如果你的计算是必要的，其并不会为你的程序节省任何工作或任何实践，甚至可能使程序变慢，并增加内存用量，所以在使用lazy evaluation之前，你必须先考虑清楚，是否真的需要它
+  - 一个常见的策略是，先行使用直接易懂的eager evaluation策略，在分析报告指出“此class乃性能瓶颈所在”之后，以另一个实行lazy evaluation的class替换之
 
 ### 18. Amortize the cost of exoected computations
 
