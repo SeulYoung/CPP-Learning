@@ -523,7 +523,20 @@
 
 ### 18. Amortize the cost of exoected computations
 
+- 本条款提出你可通过over-eager evaluation（超急评估）如caching（缓存）和prefetching（预先取出）等做法分期摊还运算成本
+  - 这和条款17并不冲突，当你必须支持某些运算而其结果不总是需要的时候，lazy evaluation可以改善程序效率
+  - 但当你必须支持某些运算而其结果总是几乎被需要时，或其结果常常被多次需要时，over-eager evaluation可以改善程序效率
+  - 两者都比最直接了当的eager evaluation难以实现，但是两者都能为适当的程序带来巨大的性能提升
+
+- Caching（缓存）的使用示例之一便是，假设有一个相对昂贵的数据库查询动作，而你确信查询出的该数据会被频繁使用，那么便可以用相对廉价的“内存内数据结构查找动作”取代之，该策略就是使用一个局部缓存，这个缓存应该可以降低查询一次数据的平均成本
+
+- Prefetching（预先取出）做法的经验是，如果某处的数据被需要，通常其邻近的数据也会被需要，这便是有名的locality of reference现象，系统设计者依此现象而设计出了磁盘缓存（disk caches）、指令与数据的内存缓存（memory caches）、指令预先取出（instruction prefetches）
+  - 你可能觉得这些略显遥远，那么更常见的使用示例便是动态数据的扩容动作，此处我们应该使用over-eager evaluation，理由是，如果我们必须增加数组的大小以容纳新元素，locality of reference建议我们未来或许还需再增加大小
+  - 因此为避免第二次扩张所需的内存分配成本，可以把数组的大小调整到比它目前所需大小更大一些，希望未来的扩张落入我们此刻所增加的弹性范围内
+
 ### 19. Understand the origin of temporary objects
+
+
 
 ### 20. Facilitate the return value optimization
 
