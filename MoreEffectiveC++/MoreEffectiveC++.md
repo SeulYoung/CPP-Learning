@@ -536,17 +536,54 @@
 
 ### 19. Understand the origin of temporary objects
 
-
+- C++中真正的所谓临时对象是不可见的，不会在你的源代码中出现，只要你产生一个non-heap对象而没有为它命名，便产生了一个临时对象，此等匿名对象通常发生于两种情况
+  - 一是当隐式类型转换被施行以求函数能够调用成功时，注意只有当对象以by value方式传递或以by reference-to-const方式传递时，才会发生隐式类型转换
+  - 二是当函数返回对象时，这种代价在观念上难以避免，但是有时候你可以以某种方式撰写返回值为对象的函数，使编译器得以将临时对象优化，最常见也最有用的就是被称为return value optimization（RVO）的策略
+  - 切勿将函数中的局部对象和临时对象混为一谈
 
 ### 20. Facilitate the return value optimization
 
+- ISO/ANSI标准委员会宣布，命名对象和匿名对象都可以借由return value optimization（RVO）被优化去除
+
 ### 21. Overload to avoid implicit type conversions
+
+- 隐式转换虽然方便，但是此类转换所产生的临时对象会带来一些我们并不想要的成本，那么为了消除类型转换的需求，我们的做法就是声明数个函数，每个函数有不同的参数表，利用函数重载来消除类型转换
+  - 不过请不要忘记80-20法则，增加一大堆重载函数也不见得是件好事，除非你有理由相信，使用重载函数后，程序的整体效率可获得重大改善
 
 ### 22. Consider using `op=` instead of stand-alone `op`
 
+- C++并未在`operator+`、`operator=`和`operator+=`之间设立任何互动关系，因此要确保你所期望的互动关系，必须自己实现，一个好方法就是以复合形式（如`operator+=`）为基础实现其独身形式（如`operator+`）
+
+  ```C++
+  class Rational {
+  public:
+    ...
+    Rational& operator+=(const Rational& rhs);
+    Rational& operator-=(const Rational& rhs);
+  };
+
+  const Rational operator+(const Rational& lhs, const Rational& rhs)
+  {
+    return Rational(lhs) += rhs;
+  }
+
+  // 如果你不介意把独身形式操作符放在全局范围，甚至可以利用template消除撰写必要
+  template <typename T>
+  const T operator-(const T& lhs, const T& rhs)
+  {
+    return T(lhs) -= rhs;
+  }
+  ```
+
+- 另一个就是操作符的效率问题，一般而言，复合操作符比其对应的独身形式更有效率，因为后者通常必须返回一个新对象，因此必须负担一个临时对象的构造和析构成本，而复合操作符则是将结果写入其左端自变量，因此不需要额外的临时对象，因此作为程序库设计者，你应该两者都提供，以便用户可以根据需要自行选择
+
 ### 23. Consider alternative libraries
 
+- 有时，不同的程序库即使提供相似的机能，也往往表现出不同的性能取舍策略，所以如果你发现某个程序库的性能不尽如人意，你可以考虑是否有可能改用另一个程序库而移除某些瓶颈，由于不同程序库将效率、扩充性、移植性、类型安全性等不同的设计具现化，有时候你可以找找看是否存在另一个功能相近的程序库，而其在效率上有较高的设计权重，如果有，改用它或许可大幅改善程序性能
+
 ### 24. Understand the costs of virtual functions, multiple inheritance, virtual base classes, and RTTI
+
+- C++编译器必须找出一种方法来实现语言中的每一个性质，这种细节因编译器而异，大部分时候你并不需要关心这件事，然而某些语言特性的实现可能会对对象的大小和其member functions的执行速度带来冲击，所以面对这类特性，了解“编译器可能以什么样的方法来实现它们”是件重要的事情
 
 ## Techniques, Idioms, Patterns
 
