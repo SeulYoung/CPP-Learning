@@ -82,7 +82,7 @@
 ### 11. Handle assignment to self in operator=
 
 - 确保当对象自我赋值时`operator=`有良好行为，其中技术包括几种
-  - 比较“来源对象”和“目标对象”的地址，如果相同则直接返回
+  - 比较“来源对象”和“目标对象”的地址，如果相同则直接返回，但可能不具备异常安全性
   - 精心周到的语句顺序，例如先“记住”原有对象，然后“复制”新值，最后“销毁”原有对象
   - 利用copy-and-swap技术
 
@@ -381,7 +381,7 @@
 
 - 至于C++为何会以这种方式运作，答案在于运行期效率，如果缺省参数值是动态绑定的，编译器就必须有某种方法在运行期为virtual函数决定适当的参数缺省值
 
-- 合适的做法是考虑virtual函数的替代设计，其中之一便是NVI手法，令base class内的一个public non-virtual函数调用private virtual函数，后者可被derived class重新定义
+- 合适的做法是考虑virtual函数的替代设计，其中之一便是non-virtual interface（NVI）手法，令base class内的一个public non-virtual函数调用private virtual函数，后者可被derived class重新定义
 
 ### 38. Model "has-a" or "is-implemented-in-terms-of" through composition
 
@@ -504,7 +504,7 @@
   }
   ```
 
-- 因类型参数（type parameters）而造成的代码碰撞，往往可降低，做法是让带有完全相同二进制表述（binary representations）的具现类型共享实现码
+- 因类型参数（type parameters）而造成的代码膨胀，往往可降低，做法是让带有完全相同二进制表述（binary representations）的具现类型共享实现码
   - 例如大多数平台上，所有指针类型都有相同的二进制表述，因此templates持有指针者（如`list<int*>`和`list<SquareMatrix<long, 3>*`等等）往往应该对每一个成员函数使用唯一一份底层实现
   - 如果你实现某些成员函数而它们操作强类型指针（strongly typed pointers，即`T*`），你应该令它们调用另一个操作无类型指针（untyped pointers，即`void*`）的函数，由后者完成实际工作
 
