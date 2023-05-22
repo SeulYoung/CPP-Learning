@@ -610,12 +610,182 @@
 - 以下表格对继承相关的成本做了一份摘要
   | 性质 | 对象大小增加 | Class数据量增加 | Inlining几率降低 |
   | ---- | ------------ | --------------- | --------------- |
+  | 虚函数 | 是 | 是 | 是 |
+  | 多重继承 | 是 | 是 | 否 |
+  | 虚基类 | 往往如此 | 有时候 | 否 |
+  | RTTI | 否 | 是 | 否 |
 
 ## Techniques, Idioms, Patterns
 
 ### 25. Virtualizing constructors and non-member functions
 
+- 所谓virtual constructor是某种函数，视其获得的输入，可产生不同类型的对象
+  - 思考一下，如下代码中`readComponent`函数的行为，它产生一个新对象，或许是`TextBlock`，或许是`Graphic`，视其读入的数据而定，由于其产生新的对象，所以行为仿若constructor，但是能产生不同类型的对象，所以被称为一个virtual constructor
+
+  ```C++
+    class NLComponent { // 抽象基类
+    public:
+      ...
+    };
+    class TextBlock : public NLComponent {
+    public:
+      ...
+    };
+    class Graphic : public NLComponent {
+    public:
+      ...
+    };
+    
+    class NewsLetter {
+    public:
+      NewsLetter(isstream& str); // 从流中读取一个NewsLetter
+      ...
+    private:
+      // 从str中读取一个NLComponent，存入components
+      static NLComponent* readComponent(isstream& str);
+      list<NLComponent*> components;
+    }
+
+    NewsLetter::NewsLetter(isstream& str) {
+      while (str) {
+        components.push_back(readComponent(str));
+      }
+    }
+  ```
+
+- 有一种特别但被广泛运用的virtual constructor，即所谓的virtual copy constructor，该函数会返回一个指针，指向其调用者的一个新副本
+  - 如下所示，virtual copy constructor只是调用真正的copy constructor，这保持了两者行为的一贯性，这种方法使得我们无需关心指针真正指向什么，都可以对其进行复制
+
+  ```C++
+    class NLComponent { // 抽象基类
+    public:
+      virtual NLComponent* clone() const = 0;
+      ...
+    };
+    class TextBlock : public NLComponent {
+    public:
+      virtual TextBlock* clone() const { return new TextBlock(*this); }
+      ...
+    };
+    class Graphic : public NLComponent {
+    public:
+      virtual Graphic* clone() const { return new Graphic(*this); }
+      ...
+    };
+    // 如此一来，NewsLetter的copy ctor就可以很轻松的被实现
+    NewsLetter::NewsLetter(const NewsLetter& rhs) {
+      for （list<NLComponent*>::const_iterator it = rhs.components.begin(); it != rhs.components.end(); ++it) {
+        components.push_back((*it)->clone());
+      }
+    }
+  ```
+
+- 最后一种手法是将non-member functions的行为虚化，就像真正的constructors无法真正地被虚化一样，non-member functions也无法被虚化，但是我们仍然可以让其的行为视其参数的动态类型而不同
+  - 如下所示，由于`operator<<`是一个non-member function，所以无法被virtual化，但将其行为虚化的思路也很简单，我们只需要写一个虚函数做实际工作，再写一个什么都不做的非虚函数只负责调用虚函数即可
+
+  ```C++
+    class NLComponent { // 抽象基类
+    public:
+      virtual ostream& print(ostream& s) const = 0;
+      ...
+    };
+    class TextBlock : public NLComponent {
+    public:
+      virtual ostream& print(ostream& s) const;
+      ...
+    };
+    class Graphic : public NLComponent {
+    public:
+      virtual ostream& print(ostream& s) const;
+      ...
+    };
+
+    inline ostream& operator<<(ostream& s, const NLComponent& c) {
+      return c.print(s);
+    }
+  ```
+
 ### 26. Limiting the number of objects of a class
+
+- 首先来考虑一个对象的情况，如果我们想要限制某个class的对象数量，最简单的方法就是将其constructors声明为private，然后再选择性的解除限制，例如将该对象封装在某个函数内
+  - 此处的代码是将Printer封装在friend函数内，你当然也可以使thePrinter函数成为class Printer的static member function
+
+  ```C++
+    class Printer {
+    public:
+      friend Printer& thePrinter(); // 该函数返回Printer的唯一对象
+    private:
+      Printer();
+      Printer(const Printer&);
+      ...
+    };
+
+    Printer& thePrinter() {
+      static Printer p; // 该对象是唯一的，friend函数使其访问private构造函数
+      return p;
+    }
+  ```
+
+  - 但是上述代码有两个精细的地方值得探讨
+    - 第一，形成唯一一个Printer对象的使函数中static对象而非class中的static对象
+      - class拥有一个static对象的意思是，即使从未被用到，它也会被构造，而函数拥有一个static对象的意思是，此对象在函数第一次被调用时才产生，如果函数从未被调用，此对象也不会产生
+        - C++的一个哲学基础是，你不应该为你未使用的东西付出代价，而将对象定义为函数内的static，正是固守此哲学的一种体现
+      - 另一个问题是初始化时机，我们明确知道function static的初始化时机是在函数第一次被调用时，但是class static或global static则不一定在什么时候初始化
+        - C++对于同一编译单元内的static的初始化顺序是有一些保证的，但对于不同编译单元的static的初始化顺序则没有保证
+    - 第二个细微点是此类函数与inline的互动（新版ISO/ANSI标准委员会已经把inline函数的默认连接（linkage）由内部（internal）改为外部（external），所以此问题已消除）
+      - 看看thePrinter的内容是如此短小，直觉告诉你这个函数被声明为inline再适合不过了，但是思考一下，你正是只需要唯一一份对象才有了这个函数
+      - inline意味着编译器应该将每一个调用动作以函数本身取代，但对于non-member functions，它还意味着这个函数有内部连接（internal linkage），而函数如果带有内部连接，可能会在程序中被复制，也就是说程序的目标代码可能会对带有内部连接的函数复制一份以上的代码，而此复制也包括函数内的static对象
+
+- 另一个用来计算多个对象个数的常用方法便是类似于引用计数一样的实现，我们可以将对象计数的实现封装并实现自动化，如下便是一种常用的实现方式
+
+  ```C++
+  template<typename BeingCounted>
+  class Counted {
+  public:
+    class TooManyObjects {}; // 可被抛出的异常类
+    static int objectCount() { return numObjects; }
+  protected:
+    Counted();
+    Counted(const Counted& rhs);
+    ~Counted() { --numObjects; }
+  private:
+    static int numObjects;
+    static const size_t maxObjects;
+    void init();
+  };
+
+  template<typename BeingCounted>
+  int Counted<BeingCounted>::numObjects; // 定义numObjects并自动初始化为0
+
+  template<typename BeingCounted>
+  Counted<BeingCounted>::Counted() { init(); }
+
+  template<typename BeingCounted>
+  Counted<BeingCounted>::Counted(const Counted<BeingCounted>&) { init(); }
+
+  template<typename BeingCounted>
+  void Counted<BeingCounted>::init() {
+    if (numObjects >= maxObjects) throw TooManyObjects();
+    ++numObjects;
+  }
+
+  // 修改Printer使其使用Counted
+  class Printer : private Counted<Printer> { // 注意private继承，析构函数无需声明为virtual
+  public:
+    static Printer* makePrinter();
+    static Printer* makePrinter(const Printer& rhs);
+    ~Printer();
+    ...
+    using Counted<Printer>::objectCount;    // 由于private继承，需要使用using declaration
+    using Counted<Printer>::TooManyObjects; // 恢复objectCount函数的public访问层级
+  private:
+    Printer(); // 构造中无需关心任何计数相关的事情，因为基类构造函数会自动处理
+    Printer(const Printer& rhs);
+    ...
+  };
+  // 必须手动定义maxObjects并初始化，否则会在连接期有未定义错误
+  const size_t Counted<Printer>::maxObjects = 10; 
+  ```
 
 ### 27. Requiring or prohibiting heap-based objects
 
@@ -631,8 +801,20 @@
 
 ### 32. Program in the future tense
 
+- 未来式思维可增加你的代码重用性、加强其可维护性、使其更健壮，并促使在一个“改变实乃必然”的环境中有着优雅的改变，但未来式也必须和现在式取得平衡，一些常见的额外考虑如下
+  - 提供完整的classes，即使某些部分目前用不到，当新的需求进来，你不太需要回头去修改那些旧的代码
+  - 设计你的接口，使有利于共同的操作行为，阻止共同的错误，让这些classes轻易被正确使用，难以被错误使用
+  - 尽量使你的代码泛化，除非有不良的影响，例如你在设计用于树状结构遍历的算法，请考虑将其泛化，使其能够处理任何种类的directed acyclic graph
+
 ### 33. Make non-leaf classes abstract
 
 ### 34. Understand how to combine C++ and C in the same program
+
+- 如果你打算在同一个程序中混用C++和C，请记住以下几个简单守则
+  - 确定你的C++和C编译器产出兼容的目标文件（object files）
+  - 将双方都使用的函数声明为extern "C"
+  - 如果可能，尽量在C++中撰写main函数
+  - 总是以delete删除new返回的内存，总是以free释放malloc返回的内存
+  - 将两个语言间的数据结构传递限制于C所能了解的形式，C++ structs如果内含非虚函数，倒是不受此限
 
 ### 35. Familiarize yourself with the language standard
