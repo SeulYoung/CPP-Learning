@@ -1,6 +1,6 @@
 # Effective Modern C++
 
-## Deducing Types
+## CHAPTER 1 Deducing Types
 
 ### 1. Understand template type deduction
 
@@ -58,7 +58,7 @@
 
 - 这些工具可能既不准确也无帮助，所以理解C++类型推导规则才是最重要的
 
-## auto
+## CHAPTER 2 auto
 
 ### 5. Prefer auto to explicit type declarations
 
@@ -87,7 +87,7 @@
 - 解决方案是强制使用一个不同的类型推导形式，这种方法我通常称之为显式类型初始器惯用法（the explicitly typed initialized idiom）
   - 显式类型初始器惯用法使用auto声明一个变量，然后对表达式强制类型转换（cast）得出你期望的推导结果，例如`auto x = static_cast<bool>(y);`
 
-## Moving to Modern C++
+## CHAPTER 3 Moving to Modern C++
 
 ### 7. Distinguish () and {} when creating objects
 
@@ -241,7 +241,7 @@
 
 - 另一个注意点是没有“成员函数模版阻止编译器生成特殊成员函数”的规则，这意味着此时编译器仍会生成移动和拷贝操作（假设正常生成它们的条件满足），即使可以模板实例化产出拷贝构造和拷贝赋值运算符的函数签名
 
-## Smart Pointers
+## CHAPTER 4 Smart Pointers
 
 ### 18. Use std::unique_ptr for exclusive-ownership resource management
 
@@ -263,4 +263,94 @@
   - 默认资源销毁是通过delete，但是也支持自定义删除器，删除器的类型是什么对于`std::shared_ptr`的类型没有影
     - 这种支持有别于`std::unique_ptr`，对于它来说，删除器类型是智能指针类型的一部分，但是对于`std::shared_ptr`则不是
     - 另一个不同于`std::unique_ptr`的地方是，指定自定义删除器不会改变`std::shared_ptr`对象的大小，不管删除器是什么，对象都是两个指针大小
-  - 避免从原始指针变量上创建std::shared_ptr
+
+- 回到刚才删除器的问题，自定义删除器可以是函数对象，函数对象可以包含任意多的数据，这意味着函数对象是任意大的，`std::shared_ptr`怎么能引用一个任意大的删除器而不使用更多的内存
+  - 事实是它必须使用更多的内存，然而，那部分内存不是`std::shared_ptr`对象的一部分，那部分在堆上面，所在的数据结构通常叫做控制块（control block）
+    - 每个`std::shared_ptr`管理的对象都有个相应的控制块，控制块除了包含引用计数值外还有一个自定义删除器的拷贝，当然前提是存在自定义删除器
+    - 如果用户还指定了自定义分配器，控制块也会包含一个分配器的拷贝，控制块可能还包含一些额外的数据，如条款21提到的，一个次级引用计数weak count
+  - 当指向对象的`std::shared_ptr`一创建，对象的控制块就建立了，通常，对于一个创建指向对象的`std::shared_ptr`的函数来说不可能知道是否有其他`std::shared_ptr`早已指向那个对象，所以控制块的创建会遵循下面几条规则
+    - `std::make_shared`（参见条款21）总是创建一个控制块，它创建一个要指向的新对象，所以可以肯定`std::make_shared`调用时对象不存在其他控制块
+    - 当从独占指针（`std::unique_ptr`）上构造出`std::shared_ptr`时会创建控制块，独占指针没有使用控制块，所以指针指向的对象没有关联控制块
+    - 当从原始指针上构造出`std::shared_ptr`时会创建控制块，如果你想从一个早已存在控制块的对象上创建`std::shared_ptr`，你将假定传递一个`std::shared_ptr`或者`std::weak_ptr`（参见条款20）作为构造函数实参，而不是原始指针
+  - 这些规则造成的后果就是从原始指针上构造超过一个`std::shared_ptr`就会让你走上未定义行为的快车道，因为指向的对象有多个控制块关联，多个控制块意味着多个引用计数值，多个引用计数值意味着对象将会被销毁多次
+
+- 可以看出，`std::shared_ptr`给我们上了两堂课
+  - 第一，避免传给`std::shared_ptr`构造函数原始指针，通常替代方案是使用`std::make_shared`，不过如果使用了自定义删除器，用`std::make_shared`就没办法做到了
+  - 第二，如果必须传给`std::shared_ptr`构造函数原始指针，直接传`new`出来的结果，不要传指针变量
+
+### 20. Use std::weak_ptr for std::shared_ptr-like pointers that can dangle
+
+- 用`std::weak_ptr`替代可能会悬空的`std::shared_ptr`
+  - `std::weak_ptr`的潜在使用场景包括：缓存、观察者列表、打破`std::shared_ptr`环状结构
+  - 从效率角度来看，`std::weak_ptr`与`std::shared_ptr`基本相同
+    - 两者的大小是相同的，使用相同的控制块（参见条款19），构造、析构、赋值操作涉及引用计数的原子操作
+    - 这可能让你感到惊讶，因为我们知道`std::weak_ptr`不影响引用计数，但是其实是`std::weak_ptr`不参与对象的共享所有权，因此不影响指向对象的引用计数，实际上在控制块中还是有第二个引用计数，`std::weak_ptr`操作的是第二个引用计数
+
+### 21. Prefer std::make_unique and std::make_shared to direct use of new
+
+- 和直接使用new相比，make函数消除了代码重复，提高了异常安全性，对于`std::make_shared`和`std::allocate_shared`，生成的代码更小更快
+  - `std::make_unique`和`std::make_shared`是三个make函数中的两个，它们接收任意的多参数集合，完美转发到构造函数去动态分配一个对象，然后返回这个指向这个对象的指针
+  - 第三个make函数是`std::allocate_shared`，它行为和`std::make_shared`一样，只不过第一个参数是用来动态分配内存的allocator对象
+  - 如果你对提高异常安全性有疑问，考虑`processWidget(std::shared_ptr<Widget>(new Widget), computePriority());`
+    - 这段代码怎么会泄漏呢，答案和编译器将源码转换为目标代码有关，在运行时，一个函数的实参必须先被计算，这个函数再被调用，但是编译器不需要按照执行顺序生成代码
+    - `new Widget`必须在`std::shared_ptr`的构造函数被调用前执行，因为`new`出来的结果作为构造函数的实参，但`computePriority`可能在这之前，之后，或者之间执行
+    - 如果`computePriority`在之间被执行，一旦该函数抛出异常，那么第一步动态分配的`Widget`就会泄漏，因为它永远都不会被第三步的`std::shared_ptr`所管理了
+    - 而使用`processWidget(std::make_shared<Widget>(), computePriority());`可以防止这种问题
+  - 至于`std::make_shared`和`std::allocate_shared`生成更小，更快的代码，并使用更简洁的数据结构
+    - 这是因为直接使用`new`需要两次内存分配，一次是为对象分配内存，一次是为控制块分配内存
+    - 而`std::make_shared`和`std::allocate_shared`只需要一次内存分配，同时容纳了对象和控制块，这种优化减少了程序的静态大小，因为代码只包含一个内存分配调用，并且它提高了可执行代码的速度，因为内存只分配一次
+    - 此外，使用`std::make_shared`避免了对控制块中的某些簿记信息的需要，潜在地减少了程序的总内存占用
+
+- 不适合使用make函数（`std::unique_ptr`只有这两种情况，但是`std::shared_ptr`更多）的情况包括需要指定自定义删除器和希望用花括号初始化
+  - 这意味着在make函数中，完美转发使用小括号，而不是花括号，因此如果你想用花括号初始化指向的对象，你必须直接使用new
+  - 但是，条款30介绍了一个变通的方法，使用auto类型推导从花括号初始化创建`std::initializer_list`对象，然后将auto创建的对象传递给make函数
+
+- 对于`std::shared_ptrs`，其他不建议使用make函数的情况包括更多
+  - 有自定义内存管理的类，例如一些类重载了`operator new`和`operator delete`
+    - 这些函数的存在意味着对这些类型的对象的全局内存分配和释放是不合常规的，设计这种定制操作往往只会精确的分配、释放对象大小的内存，例如，`Widget`类的`operator new`和`operator delete`只会处理`sizeof(Widget)`大小的内存块的分配和释放
+    - 这种系列行为不太适用于`std::shared_ptr`对自定义分配（通过`std::allocate_shared`）和释放（通过自定义删除器）的支持，因为`std::allocate_shared`需要的内存总大小不等于动态分配的对象大小，还需要再加上控制块大小
+    - 因此，使用make函数去创建重载了`operator new`和`operator delete`类的对象是个典型的糟糕想法
+  - 特别关注内存的系统，非常大的对象，以及`std::weak_ptrs`比对应的`std::shared_ptrs`活得更久
+    - 正如之前所说，控制块除了引用计数，还包含簿记信息，引用计数追踪有多少`std::shared_ptrs`指向控制块，但控制块还有第二个计数，记录多少个`std::weak_ptrs`指向控制块（即weak count，实际上，weak count的值不总是等于指向控制块的std::weak_ptr的数目）
+    - 当一个`std::weak_ptr`检测它是否过期时，它会检测指向的控制块中的引用计数（而不是weak count），如果引用计数是0，`std::weak_ptr`就已经过期
+    - 所以只要`std::weak_ptrs`引用一个控制块，该控制块必须继续存在，包含它的内存就必须保持分配，通过`std::shared_ptr`的make函数分配的内存，直到最后一个`std::shared_ptr`和最后一个指向它的`std::weak_ptr`已被销毁，才会释放
+    - 如果对象类型非常大，而且销毁最后一个`std::shared_ptr`和销毁最后一个`std::weak_ptr`之间的时间很长，那么在销毁对象和释放它所占用的内存之间可能会出现延迟
+
+### 22. When using the Pimpl Idiom, define special member functions in the implementation file
+
+- Pimpl惯用法通过减少在类实现和类使用者之间的编译依赖来减少编译时间。
+  - 对于`std::unique_ptr`类型的pImpl指针，需要在头文件的类里声明特殊的成员函数，但是在实现文件里面来实现他们，即使是编译器自动生成的代码可以工作，也要这么做，但此规则不适用于`std::shared_ptr`
+  - `std::unique_ptr`和`std::shared_ptr`在pImpl指针上的表现上的区别的深层原因在于，他们支持自定义删除器的方式不同。
+    - 对`std::unique_ptr`而言，删除器的类型是这个智能指针的一部分，这让编译器有可能生成更小的运行时数据结构和更快的运行代码，这种更高效率的后果之一就是`std::unique_ptr`指向的类型，在编译器的生成特殊成员函数（如析构函数，移动操作）被调用时，必须已经是一个完成类型
+    - 而对`std::shared_ptr`而言，删除器的类型不是该智能指针的一部分，这让它会生成更大的运行时数据结构和稍微慢点的代码，但是当编译器生成的特殊成员函数被使用的时候，指向的对象不必是一个完成类型
+
+## CHAPTER 5 RValue References, Move Semantics, and Perfect Forwarding
+
+### 23. Understand std::move and std::forward
+
+- 当你第一次了解到移动语义（move semantics）和完美转发（perfect forwarding）的时候，它们看起来非常直观
+  - 移动语义使编译器有可能用廉价的移动操作来代替昂贵的拷贝操作，正如拷贝构造函数和拷贝赋值操作符给了你控制拷贝语义的权力，移动构造函数和移动赋值操作符也给了你控制移动语义的权力，移动语义也允许创建只可移动（move-only）的类型，例如`std::unique_ptr`，`std::future`和`std::thread`
+  - 完美转发使接收任意数量实参的函数模板成为可能，它可以将实参转发到其他的函数，使目标函数接收到的实参与被传递给转发函数的实参保持一致
+  - 而右值引用是连接这两个截然不同的概念的胶合剂，它是使移动语义和完美转发变得可能的基础语言机制
+
+- 另一个需要牢记的一点是形参永远是左值，即使它的类型是一个右值引用
+  - 比如`void f(Widget&& w);`，形参w是一个左值，即使它的类型是一个rvalue-reference-to-Widget
+
+- 对于`std::move`，需要记住两点
+  - 第一，不要在你希望能移动对象的时候，声明他们为const，对const对象的移动请求会悄无声息的被转化为拷贝操作
+    - 这是因为移动构造函数只接受一个指向non-const的的右值引用，然而，该右值却可以被传递给拷贝构造函数，因为lvalue-reference-to-const允许被绑定到一个const右值上
+    - 因此，新对象在成员初始化的过程中调用了拷贝构造函数，即使原对象已经被转换成了右值，这样是为了确保维持const属性的正确性
+  - 第二，`std::move`不仅不移动任何东西，而且它也不保证它执行转换的对象可以被移动，关于`std::move`，你能确保的唯一一件事就是将它应用到一个对象上，能够得到一个右值
+
+- 对于`std::forward`，只有当它的参数被绑定到一个右值时，才将参数转换为右值
+  - 还记得函数的形参永远是左值吗，所以我们才需要一种机制，当且仅当传递给函数的用以初始化形参的实参是一个右值时，形参会被转换为一个右值
+
+### 24. Distinguish universal references from rvalue references
+
+- 通用引用的基础是一个“抽象”，其底层真相被称为引用折叠（reference collapsing），条款28将致力于讨论它，此处你只要能够区分通用引用即可
+  - 如果一个函数模板形参的类型为`T&&`，并且T需要被推导得知，或者如果一个对象被声明为`auto&&`，这个形参或者对象就是一个通用引用
+  - 如果类型声明的形式不是标准的`type&&`，或者如果**类型推导没有发生**，那么`type&&`代表一个右值引用
+    - 即使一个简单的const修饰符的出现，也足以使一个引用失去成为通用引用的资格
+  - 通用引用，如果它被右值初始化，就会对应地成为右值引用，如果它被左值初始化，就会成为左值引用
+
+### 25. Use std::move on rvalue references, std::forward on universal references
