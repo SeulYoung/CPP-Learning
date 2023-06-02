@@ -13,12 +13,15 @@
   f(expr); // 从expr中推导T和ParamType
   ```
 
-  - ParamType是一个指针或引用，但不是通用引用，即`T& param`（关于通用引用请参见条款24。在这里你只需要知道它存在，而且不同于左值引用和右值引用）
-    - 在这种情况下，如果expr的类型是一个引用，忽略引用部分，然后expr的类型与ParamType进行模式匹配来决定T
-  - ParamType是一个通用引用，即`T&& param`
-    - 如果expr是左值，T和ParamType都会被推导为左值引用。这非常不寻常，第一，这是模板类型推导中唯一一种T被推导为引用的情况。第二，虽然ParamType被声明为右值引用类型，但是最后推导的结果是左值引用。
+  - 情景一：ParamType是一个指针或引用，但不是通用引用，即`T& param`（关于通用引用请参见条款24。在这里你只需要知道它存在，而且不同于左值引用和右值引用）
+    - 在这种情况下，如果expr的类型是一个引用，忽略引用部分
+    - 然后expr的类型与ParamType进行模式匹配来决定T
+  - 情景二：ParamType是一个通用引用，即`T&& param`
+    - 如果expr是左值，T和ParamType都会被推导为左值引用。这非常不寻常
+      - 第一，这是模板类型推导中唯一一种T被推导为引用的情况
+      - 第二，虽然看似ParamType被声明为右值引用类型，但是最后推导的结果是左值引用
     - 如果expr是右值，就使用正常的（也就是情景一）推导规则
-  - ParamType既不是指针也不是引用，即`T param`
+  - 情景三：ParamType既不是指针也不是引用，即`T param`
     - 当ParamType既不是指针也不是引用时，通过传值（pass-by-value）的方式处理，和之前一样，如果expr的类型是一个引用，忽略这个引用部分
     - 如果忽略expr的引用性（reference-ness）之后，expr是一个const，那就再忽略const。如果它是volatile，也忽略volatile（volatile对象不常见，它通常用于驱动程序的开发中。关于volatile的细节请参见条款40）
     - 但是此处有一个特殊情况，考虑`const char* const ptr = "Hello"`，此时ParamType被推导为`const char*`
@@ -41,6 +44,8 @@
 
 - 通常，decltype会精确的告诉你你想要的结果，相比模板类型推导和auto类型推导，decltype只是简单的返回名字或者表达式的类型
   - decltype最主要的用途就是用于声明函数模板，而这个函数返回类型依赖于形参类型
+  - 至于为什么不能单独使用auto，是因为函数返回类型中使用auto，编译器实际上是使用的模板类型推导的那套规则
+    - 如果那样的话这里就会有一些问题，例如`operator[]`对于大多数T类型的容器会返回一个`T&`，但是在模板类型推导期间，表达式的引用性（reference-ness）会被忽略
 
 - 但是对于T类型的不是单纯的变量名的**左值表达式**，decltype总是产出T的引用（`T&`），当使用`decltype(auto)`的时候一定要加倍的小心，在表达式中看起来无足轻重的细节将会影响到推导结果
 
@@ -354,3 +359,146 @@
   - 通用引用，如果它被右值初始化，就会对应地成为右值引用，如果它被左值初始化，就会成为左值引用
 
 ### 25. Use std::move on rvalue references, std::forward on universal references
+
+- 当把右值引用转发给其他函数时，右值引用应该被无条件转换为右值（通过`std::move`），因为它们总是绑定到右值，当转发通用引用时，通用引用应该有条件地转换为右值（通过`std::forward`），因为它们只是有时绑定到右值
+  - 但是需要注意，在有些稀少的情况下，你需要调用`std::move_if_noexcept`代替`std::move`（参考条款14）
+  - 如果你在按值返回的函数中，返回值绑定到右值引用或者通用引用上，需要对返回的引用使用`std::move`或者`std::forward`，参考如下代码
+
+    ```C++
+    Matrix operator+(Matrix&& lhs, const Matrix& rhs)
+    {
+        lhs += rhs;
+        return std::move(lhs); //移动lhs到返回值中，否则lhs是个左值的事实，会强制编译器拷贝它到返回值的内存空间
+    }
+    ```
+
+  - 但是如果局部对象可以被返回值优化消除，就绝不要使用`std::move`或者`std::forward`
+    - 编译器可能会在按值返回的函数中消除对局部对象的拷贝（或者移动），如果满足（1）局部对象与函数返回值的类型相同，（2）局部对象就是要返回的东西（适合的局部对象包括大多数局部变量，但函数形参不满足要求）
+    - 函数的传值形参虽然没资格参与函数返回值的拷贝消除，但是如果作为返回值的话编译器会将其视作右值
+
+### 26. Avoid overloading on universal references
+
+- 使用通用引用的函数在C++中是最贪婪的函数，它们几乎可以精确匹配任何类型的实参（极少不适用的实参在条款30中介绍），这也是把重载和通用引用组合在一块是糟糕主意的原因，通用引用的实现会匹配比开发者预期要多得多的实参类型
+  - 尤其是完美转发构造函数更是糟糕的实现，因为对于non-const左值，它们比拷贝构造函数更匹配，而且会劫持派生类对于基类的拷贝和移动构造函数的调用
+
+### 27. Familiarize yourself with alternatives to overloading on universal references
+
+- 通用引用和重载的组合替代方案包括使用不同的函数名，通过lvalue-reference-to-const传递形参，按值传递形参，使用tag dispatch
+
+- 通过`std::enable_if`约束模板，允许组合通用引用和重载使用，但它也控制了编译器在哪种条件下才使用通用引用重载。
+  - 通用引用参数通常具有高效率的优势，但是可用性就值得斟酌
+  - 例如如下代码，所需要解决的是（1）加入一个Person构造函数重载来处理整型参数，（2）约束模板构造函数使其对于某些实参禁用
+
+  ```C++
+  class Person {
+  public:
+      template<
+          typename T,
+          typename = std::enable_if_t<
+              !std::is_base_of<Person, std::decay_t<T>>::value
+              &&
+              !std::is_integral<std::remove_reference_t<T>>::value
+          >
+      >
+      explicit Person(T&& n)          //对于std::strings和可转化为
+      : name(std::forward<T>(n))      //std::strings的实参的构造函数
+      { … }
+
+      explicit Person(int idx)        //对于整型实参的构造函数
+      : name(nameFromIdx(idx))
+      { … }
+
+      …                               //拷贝、移动构造函数等
+
+  private:
+      std::string name;
+  };
+  ```
+
+### 28. Understand reference collapsing
+
+- 引用折叠发生在四种情况下：模板实例化，auto类型推导，typedef与别名声明的创建和使用，以及decltype
+  - 当编译器在引用折叠环境中生成了引用的引用时，结果就是单个引用
+    - 有左值引用折叠结果就是左值引用，否则就是右值引用
+  - 通用引用就是在特定上下文的右值引用，上下文就是指通过类型推导来区分左值和右值并发生引用折叠的地方
+
+### 29. Assume that move operations are not present, not cheap, and not used
+
+- 存在几种情况，C++11的移动语义并无优势：
+  - 没有移动操作：要移动的对象没有提供移动操作，所以移动的写法也会变成复制操作
+  - 移动不会更快：要移动的对象提供的移动操作并不比复制速度更快
+  - 移动不可用：进行移动的上下文要求移动操作不会抛出异常，但是该操作没有被声明为noexcept
+  - 值得一提的是，还有另一个场景，会使得移动并没有那么有效率
+    - 源对象是左值：除了极少数的情况外（例如条款25），只有右值可以作为移动操作的来源
+  - 上诉情况就是通用代码中的典型情况，比如编写模板代码，因为你不清楚你处理的具体类型是什么，因此可能需要假定移动操作不存在，成本高，未被使用，但是在已知的类型或者支持移动语义的代码中，就不需要上面的假设了
+
+### 30. Familiarize yourself with perfect forwarding failure cases
+
+- 当模板类型推导失败或者推导出错误类型时，我们称之为完美转发会失败，导致完美转发失败的实参种类有以下几种
+  - 花括号初始化
+    - 问题在于，将花括号初始化传递给未声明为`std::initializer_list`的函数模板形参，被判定为“非推导上下文”，但是auto面对这种情况的类型推导是成功的
+  - 0或者NULL作为空指针，会使类型推导出错
+  - 仅有声明的整型static const数据成员
+  - 重载函数的名称和模板名称
+    - 因为函数模板相比于普通函数是没有可接受的类型信息的，使得编译器不可能决定出哪个函数应被传递
+  - 位域
+    - 禁止的理由很充分，位域可能包含了机器字的任意部分（比如32位int的3-5位），但是这些东西无法直接寻址，在硬件层面引用和指针是一样的，所以没有办法创建一个指向任意bit的指针（C++规定你可以指向的最小单位是char），同样没有办法绑定引用到任意bit上
+
+## CHAPTER 6 Lambda Expressions
+
+### 31. Avoid default capture modes
+
+- 与lambda相关的词汇可能会令人疑惑，让我们做一下简单的回顾
+  - lambda表达式（lambda expression）就是一个表达式，例如`[](int val){ return 0 < val && val < 10; }`
+  - 闭包（enclosure）是lambda创建的运行时对象，依赖捕获模式，闭包持有被捕获数据的副本或者引用，闭包是可作为实参在运行时传递给函数的对象，闭包通常可以拷贝，所以可能有多个闭包对应于一个lambda
+  - 闭包类（closure class）是从中实例化闭包的类，每个lambda都会使编译器生成唯一的闭包类，lambda中的语句成为其闭包类的成员函数中的可执行指令
+
+- C++11中有两种默认的捕获模式：按引用捕获和按值捕获
+  - 但默认按引用捕获模式可能会带来悬空引用的问题，而默认按值捕获模式可能会诱骗你让你以为能解决悬空引用的问题（实际上并没有），还会让你以为你的闭包是独立的（事实上也不是独立的）
+  - 例如lambda可能会依赖局部变量和形参（它们可能被捕获），还有静态存储生命周期（static storage duration）的对象，这些对象定义在全局空间或者命名空间，或者在类、函数、文件中声明为static
+    - 这些对象虽然也能在lambda里使用，但它们不能被捕获，但默认按值捕获可能会因此误导你，让你以为捕获了这些变量
+
+### 32. Use init capture to move objects into closures
+
+- 使用C++14的初始化捕获将对象移动到闭包中
+  - 初始化捕获可以让你指定从lambda生成的闭包类中的数据成员名称和初始化该成员的表达式
+
+### 33. Use decltype on auto&& parameters to std::forward them
+
+- C++14中泛型lambda（generic lambdas）是最值得期待的特性之一，在lambda的形参中可以使用auto关键字，再加上可变形参，意味着你可以实现如下代码
+
+  ```C++
+  auto f =
+      [](auto&&... params)
+      {
+          return func(std::forward<decltype(params)>(params)...);
+      };
+  ```
+
+- 但是要注意，对`auto&&`形参使用`decltype`以`std::forward`它们
+
+### 34. Prefer lambdas to std::bind
+
+- lambda几乎总是比`std::bind`更好的选择，因为lambda更易读，更具表达力并且可能更高效
+
+## CHAPTER 7 The Concurrency API
+
+### 35. Prefer task-based programming to thread-based
+
+- 如果想要异步执行doAsyncWork函数，通常有两种方式，其一是通过创建`std::thread`执行doAsyncWork，这是应用了基于线程（thread-based）的方式，其二是将doAsyncWork传递给`std::async`，这是一种基于任务（task-based）的策略，传递给`std::async`的函数对象被称为一个任务（task）
+  - 基于任务的方法通常比基于线程的方法更优，第一个原因是基于任务的方法代码量更少
+  - 第二，假设调用doAsyncWork的代码对于其提供的返回值是有需求的，基于线程的方法对此无能为力，而基于任务的方法就简单了，因为`std::async`返回的`std::future`提供了get函数（从而可以获取返回值）
+  - 第二，如果doAsycnWork发生了异常，get函数就显得更为重要，因为get函数可以提供抛出异常的访问，而基于线程的方法，如果doAsyncWork抛出了异常，程序会直接终止（通过调用`std::terminate`）
+
+- 基于线程与基于任务最根本的区别在于，基于任务的抽象层次更高，基于任务的方式使得开发者从线程管理的细节中解放出来，对此在C++并发软件中总结了“thread”的三种含义
+  - 硬件线程（hardware threads）是真实执行计算的线程，现代计算机体系结构为每个CPU核心提供一个或者多个硬件线程
+  - 软件线程（software threads）（也被称为系统线程（OS threads、system threads））是操作系统管理的在硬件线程上执行的线程，通常可以存在比硬件线程更多数量的软件线程，因为当软件线程被阻塞的时候（比如 I/O、同步锁或者条件变量），操作系统可以调度其他未阻塞的软件线程执行提供吞吐量
+  - `std::thread`是C++执行过程的对象，并作为软件线程的句柄（handle），有些`std::thread`对象代表“空”句柄，即没有对应软件线程，因为它们处在默认构造状态（即没有函数要执行），有些被移动走（移动到的`std::thread`就作为这个软件线程的句柄），有些被join（它们要运行的函数已经运行完），有些被detach（它们和对应的软件线程之间的连接关系被打断）
+
+- 基于线程的编程方式需要手动的线程耗尽、资源超额、负责均衡、平台适配性管理，而基于任务的设计为开发者避免了手动线程管理的痛苦，并且自然提供了一种获取异步执行程序的结果（即返回值或者异常）的方式，但是，仍然存在一些场景直接使用`std::thread`会更有优势
+  - 第一，需要访问非常基础的线程API，C++并发API通常是通过操作系统提供的系统级API（pthreads或者Windows threads）来实现的，系统级API通常会提供更加灵活的操作方式（举个例子，C++没有线程优先级和亲和性的概念）
+    - 为了提供对底层系统级线程API的访问，`std::thread`对象提供了`native_handle`的成员函数，而`std::future`（即`std::async`返回的东西）没有这种能力
+  - 第二，需要且能够优化应用的线程使用，例如要开发一款已知执行概况的服务器软件，部署在有固定硬件特性的机器上，作为唯一的关键进程
+  - 第三，需要实现C++并发API之外的线程技术，比如，C++实现中未支持的平台的线程池
+
+### 36. Specify std::launch::async if asynchronicity is essential
