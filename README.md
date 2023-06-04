@@ -1,5 +1,5 @@
 # CPP-Learning
 
-- [Effective C++](./EffectiveC++/EffectiveC++.md)
-- [More Effective C++](./MoreEffectiveC++/MoreEffectiveC++.md)
-- [Effective Modern C++](./EffectiveModernC++/EffectiveModernC++.md)
+- [Effective C++](./EffectiveCpp/EffectiveCpp.md)
+- [More Effective C++](./MoreEffectiveCpp/MoreEffectiveCpp.md)
+- [Effective Modern C++](./EffectiveModernCpp/EffectiveModernCpp.md)
