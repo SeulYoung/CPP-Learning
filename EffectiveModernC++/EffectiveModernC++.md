@@ -1,5 +1,8 @@
 # Effective Modern C++
 
+> **Note**
+> 感谢[CnTransGroup](https://github.com/CnTransGroup)的翻译
+
 ## CHAPTER 1 Deducing Types
 
 ### 1. Understand template type deduction
@@ -502,3 +505,168 @@
   - 第三，需要实现C++并发API之外的线程技术，比如，C++实现中未支持的平台的线程池
 
 ### 36. Specify std::launch::async if asynchronicity is essential
+
+- 当调用`std::async`执行函数时（或者其他可调用对象），通常希望异步执行函数，但是事实并不一定是你所想的那样，因为`std::async`是按照启动策略来执行的，有两种标准策略
+  - `std::launch::async`启动策略意味着函数必须异步执行，即在不同的线程
+  - `std::launch::deferred`启动策略意味着函数仅当在`std::async`返回的future上调用get或者wait时才执行，这表示函数推迟到存在这样的调用时才执行（注：异步与并发是两个不同概念，这里侧重于惰性求值）
+    - 当get或wait被调用，函数会同步执行，即调用方被阻塞，直到函数运行结束，如果get和wait都没有被调用，函数将不会被执行（此处是简化说法，关键点不是要在其上调用get或wait的那个future，而是future引用的那个共享状态）
+
+- 可能让人惊奇的是，`std::async`的默认启动策略不是上面中任意一个，而是求或在一起的`std::launch::async | std::launch::deferred`
+  - 因此默认策略允许函数异步或者同步执行，这种灵活性允许`std::async`和标准库的线程管理组件承担线程创建和销毁的责任，避免资源超额，以及平衡负载
+  - 但是，使用默认启动策略的`std::async`也有一些有趣的影响，假如给定一个线程t执行语句`auto fut = std::async(f);`
+    - 无法预测f是否会与t并发运行，因为f可能被安排延迟运行
+    - 无法预测f是否会在与某线程相异的另一线程上执行，这个某线程在fut上调用get或wait，如果对fut调用函数的线程是t，含义就是无法预测f是否在异于t的另一线程上执行
+    - 无法预测f是否执行，因为不能确保在程序每条路径上，都会不会在fut上调用get或者wait
+
+- 默认启动策略的调度灵活性也会带来一些问题
+  - 首先是导致访问`thread_local`的不确定性，因为这意味着如果f读写了线程本地存储（thread-local storage，TLS），不可能预测到哪个线程的变量被访问
+    - 因为f的TLS可能是为单独的线程建的，也可能是为在fut上调用get或者wait的线程建的
+  - 其次是隐含了任务可能不会被执行的意思，会影响调用基于超时的wait的程序逻辑
+    - 因为在一个延时的任务上调用`wait_for`或者`wait_until`会产生`std::launch::deferred`值，意味着，以下循环看似应该最终会终止，但可能实际上永远运行
+
+    ```C++
+    auto fut = std::async(f);           //异步运行f（理论上）
+    // 有问题的设计
+    while (fut.wait_for(100ms) !=       //循环，直到f完成运行时停止...
+          std::future_status::ready)   //但是有可能永远不会发生！
+    {
+        …
+    }
+    // 修复后的设计（只需要检查与std::async对应的future是否被延迟执行即可，那样就会避免进入无限循环）
+    if (fut.wait_for(0s) ==                 //如果task是deferred（被延迟）状态
+        std::future_status::deferred)
+    {
+        …                                   //在fut上调用wait或get来异步调用f
+    } else {                                //task没有deferred（被延迟）
+        while (fut.wait_for(100ms) !=       //不可能无限循环（假设f完成）
+              std::future_status::ready) {
+            …                               //task没deferred（被延迟），也没ready（已准备）
+                                            //做并行工作直到已准备
+        }
+        …                                   //fut是ready（已准备）状态
+    }
+    ```
+
+- 这些各种考虑的结果就是，只要满足以下条件，`std::async`的默认启动策略就可以使用
+  - 任务不需要和执行get或wait的线程并行执行
+  - 读写哪个线程的thread_local变量没什么问题
+  - 可以保证会在std::async返回的future上调用get或wait，或者该任务可能永远不会执行也可以接受
+  - 使用wait_for或wait_until编码时考虑到了延迟状态
+  - 但是如果上述条件任何一个都满足不了，你可能想要保证`std::async`会安排任务进行真正的异步执行，进行此操作的方法是调用时，将`std::launch::async`作为第一个实参传递
+
+### 37. Make std::threads unjoinable on all paths
+
+- 每个`std::thread`对象处于两个状态之一：可结合的（joinable）或者不可结合的（unjoinable）
+  - 可结合状态的`std::thread`对应于正在运行或者可能要运行的异步执行线程
+    - 比如，对应于一个阻塞的（blocked）或者等待调度的线程的`std::thread`是可结合的，对应于运行结束的线程的`std::thread`也可以认为是可结合的
+  - 相应的，不可结合状态的std::thread则包括
+    - 默认构造的`std::thread`对象，这种`std::thread`没有函数执行，因此没有对应到底层执行线程上
+    - 已经被移动走的`std::thread`对象，移动的结果就是一个`std::thread`原来对应的执行线程现在对应于另一个`std::thread`
+    - 已经被join的`std::thread`，在join之后，`std::thread`不再对应于已经运行完了的执行线程
+    - 已经被detach的`std::thread` ，detach断开了`std::thread`对象与执行线程之间的连接
+
+- ·std::thread·的可结合性如此重要的原因之一就是当可结合的线程的析构函数被调用，程序执行会终止，因此必须要保证在代码执行的所有路径上保证thread最终是不可结合的
+  - 你可能会想，为什么`std::thread`析构的行为是这样的，那是因为另外两种显而易见的方式更糟，考虑如下示例
+
+    ```C++
+    constexpr auto tenMillion = 10000000;           //constexpr见条款15
+
+    bool doWork(std::function<bool(int)> filter,    //返回计算是否执行；
+                int maxVal = tenMillion)            //std::function见条款2
+    {
+        std::vector<int> goodVals;                  //满足filter的值
+
+        std::thread t([&filter, maxVal, &goodVals]  //填充goodVals
+                      {
+                          for (auto i = 0; i <= maxVal; ++i)
+                              { if (filter(i)) goodVals.push_back(i); }
+                      });
+
+        auto nh = t.native_handle();                //使用t的原生句柄
+        …                                           //来设置t的优先级
+
+        if (conditionsAreSatisfied()) {
+            t.join();                               //等t完成
+            performComputation(goodVals);
+            return true;                            //执行了计算
+        }
+        return false;                               //未执行计算
+    }
+    ```
+
+    - 第一种，隐式join，这种情况下，`std::thread`的析构函数将等待其底层的异步执行线程完成
+      - 这听起来是合理的，但是可能会导致难以追踪的异常表现。比如，如果`conditonAreStatisfied()`已经返回了false，`doWork`继续等待过滤器`filter`应用于所有值就很违反直觉
+    - 第二种，隐式detach，这种情况下，`std::thread`析构函数会分离`std::thread`与其底层的线程，底层线程继续运行
+      - 听起来比join的方式好，但是可能导致更严重的调试问题，比如在`doWork`中，`goodVals`是通过引用捕获的局部变量，它会被lambda修改，假定lambda异步执行时，`conditionsAreSatisfied()`返回false，这时`doWork`返回，同时局部变量（包括`goodVals`）被销毁，栈被弹出，并在`doWork`的调用点继续执行线程
+      - 想象一下这会带来什么问题，`goodVals`已经被销毁，但是线程仍然在运行，它会继续修改`goodVals`，这会导致未定义行为
+  - 每当你想在执行跳至块之外的每条路径执行某种操作，最通用的方式就是将该操作放入局部对象的析构函数中，这些对象称为RAII对象（Resource Acquisition Is Initialization objects），从RAII类中实例化
+
+### 38. Be aware of varying thread handle destructor behavior
+
+- 存储被调用者结果的位置被称为共享状态（shared state），共享状态通常是基于堆的对象，但是标准并未指定其类型、接口和实现，共享状态的存在非常重要，因为future的析构函数取决于与future关联的共享状态
+  - 引用了共享状态（使用`std::async`启动的未延迟任务建立的那个）的最后一个future的析构函数会阻塞住，直到任务完成，本质上，这种future的析构函数对执行异步任务的线程执行了隐式的join
+  - 其他所有future的析构函数简单地销毁future对象
+    - 对于异步执行的任务，就像对底层的线程执行detach
+    - 对于延迟任务来说如果这是最后一个future，意味着这个延迟任务永远不会执行了
+
+- 这些规则听起来好复杂，我们真正要处理的是一个简单的“正常”行为以及一个单独的例外
+  - 正常行为是future析构函数销毁future，那意味着不join也不detach，也不运行什么，只销毁future的数据成员
+  - 正常行为的例外情况仅在某个future同时满足下列所有情况下才会出现，此时future的析构函数才会表现“异常”行为，就是在异步任务执行完之前阻塞住，这相当于对由于运行`std::async`创建出任务的线程隐式join
+    - 它关联到由于调用`std::async`而创建出的共享状态
+    - 任务的启动策略是`std::launch::async`，原因是运行时系统选择了该策略，或者在对`std::async`的调用中指定了该策略
+    - 这个future是关联共享状态的最后一个future
+      - 对于`std::future`，情况总是如此
+      - 对于`std::shared_future`，如果还有其他的`std::shared_future`，与要被销毁的future引用相同的共享状态，则要被销毁的future遵循正常行为（即简单地销毁它的数据成员）
+
+- future的API没办法确定是否future引用了一个`std::async`调用产生的共享状态，因此给定一个任意的future对象，无法判断会不会阻塞析构函数从而等待异步任务的完成
+  - 当然，如果你有办法知道给定的future不满足上面条件的任意一条（比如由于程序逻辑造成的不满足），你就可以确定析构函数不会执行“异常”行为
+  - 比如，只有通过`std::async`创建的共享状态才有资格执行“异常”行为，但是有其他创建共享状态的方式
+    - 一种是使用`std::packaged_task`，一个`std::packaged_task`对象通过包覆（wrapping）方式准备一个函数（或者其他可调用对象）来异步执行，然后将其结果放入共享状态中，然后通过`std::packaged_task`的`get_future`函数可以获取有关该共享状态的future
+
+### 39. Consider void futures for one-shot event communication
+
+- 对于一次性事件通信考虑使用void的futures
+  - 对于简单的事件通信，基于条件变量的设计需要一个多余的互斥锁，对检测和反应任务的相对进度有约束，并且需要反应任务来验证事件是否已发生
+  - 基于flag的设计避免的上一条的问题，但是是基于轮询，而不是阻塞
+  - 条件变量和flag可以组合使用，但是产生的通信机制很不自然
+  - 使用`std::promise`和future的方案避开了这些问题，但是这个方法使用了堆内存存储共享状态，同时有只能使用一次通信的限制
+
+### 40. Use std::atomic for concurrency, volatile for special memory
+
+- 可怜的volatile本不应该出现在此处，因为它跟并发编程没有关系，但是在其他编程语言中（比如，Java和C#），volatile是有并发含义的，即使在C++中，有些编译器在实现时也将并发的某种含义加入到了volatile关键字中（但仅仅是在用那些编译器时），因此在此值得讨论下关于volatile关键字的含义以消除异议
+  - `std::atomic`用于在不使用互斥锁情况下，来使变量被多个线程访问的情况，是用来编写并发程序的一个工具
+  - `volatile`用在读取和写入不应被优化掉的内存上，意味着告诉编译器“不要对这块内存执行任何优化”，是用来处理特殊内存的一个工具
+
+## CHAPTER 8 Tweaks
+
+### 41. Consider pass by value for copyable parameters that are cheap to move and always copied
+
+- 对于可拷贝，移动开销低，而且无条件被拷贝的形参，按值传递效率基本与按引用传递效率一致，而且易于实现，还生成更少的目标代码
+  - 通过构造拷贝形参可能比通过赋值拷贝形参开销大的多
+  - 按值传递会引起切片问题，所说不适合基类形参类型
+
+### 42. Consider emplacement instead of insertion
+
+- 置入（emplacement）函数可以完成插入函数的所有功能，并且有时效率更高，至少在理论上，不会更低效
+  - 那为什么不在所有场合使用它们？因为，就像说的那样，只是“理论上”，但是实际上区别还是有的
+  - 在当前标准库的实现下，有些场景，就像预期的那样，置入执行性能优于插入，但是，有些场景反而插入更快
+  - 这种场景不容易描述，因为依赖于传递的实参的类型、使用的容器、置入或插入到容器中的位置、容器中类型的构造函数的异常安全性，和对于禁止重复值的容器（即std::set，std::map，std::unordered_set，set::unordered_map）要添加的值是否已经在容器中
+
+- 当然这个结论不是很令人满意，所以你会很高兴听到还有一种启发式的方法来帮助你确定是否应该使用置入，如果下列条件都能满足，置入会优于插入
+  - 值是通过构造函数添加到容器，而不是直接赋值，例如将值添加到`std::vector`末尾，一个先前没有对象存在的地方，新值必须通过构造函数添加到`std::vector`
+    - 但是如果看下面这个例子，新值放到已经存在了对象的一个地方，那情况就完全不一样了
+      - 对于这份代码，没有实现会在已经存在对象的位置`vs[0]`构造这个添加的`std::string`，而是通过移动赋值的方式添加到需要的位置，但是移动赋值需要一个源对象，所以这意味着一个临时对象要被创建，而置入优于插入的原因就是没有临时对象的创建和销毁，所以当通过赋值操作添加元素时，置入的优势消失殆尽
+
+      ```C++
+      std::vector<std::string> vs;        //跟之前一样
+      …                                   //添加元素到vs
+      vs.emplace(vs.begin(), "xyzzy");    //添加“xyzzy”到vs头部
+      ```
+
+  - 传递的实参类型与容器的初始化类型不同
+    - 再次强调，置入优于插入通常基于以下事实：当传递的实参不是容器保存的类型时，接口不需要创建和销毁临时对象
+    - 当将类型为T的对象添加到`container<T>`时，没有理由期望置入比插入运行的更快，因为不需要创建临时对象来满足插入的接口
+  - 容器不拒绝重复项作为新值，这意味着容器要么允许添加重复值，要么你添加的元素大部分都是不重复的
+    - 这样要求的原因是为了判断一个元素是否已经存在于容器中，置入实现通常会创建一个具有新值的节点，以便可以将该节点的值与现有容器中节点的值进行比较
+    - 如果要添加的值不在容器中，则链接该节点，如果值已经存在，置入操作取消，创建的节点被销毁，意味着构造和析构时的开销被浪费了
+    - 这样的节点更多的是为置入函数而创建，相比起为插入函数来说
